@@ -4,20 +4,19 @@ import { loadPluginApp, renderSlot } from "@get-bb/plugin-sdk/testing/app";
 import { rpcContract } from "./contracts";
 
 describe("Dynamic File Tree app", () => {
-  it("registers a section in the thread context card", async () => {
+  it("registers a section in the thread info panel", async () => {
     const captured = await loadPluginApp(() => import("../app"));
 
-    expect(captured.threadContextCardSections).toHaveLength(1);
-    expect(captured.threadContextCardSections[0]).toMatchObject({
+    expect(captured.threadInfoSections).toHaveLength(1);
+    expect(captured.threadInfoSections[0]).toMatchObject({
       id: "dynamic-file-tree",
-      title: "Files",
       group: "2_changes",
     });
   });
 
   it("opens a selected workspace file in BB preview", async () => {
     const captured = await loadPluginApp(() => import("../app"));
-    const section = captured.threadContextCardSections[0];
+    const section = captured.threadInfoSections[0];
     const rendered = renderSlot(
       section,
       {
