@@ -1,0 +1,14 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "separate-pull-requests": true,
+  "packages": {
+    "plugins/dynamic-file-tree": {
+      "release-type": "node",
+      "component": "dynamic-file-tree",
+      "package-name": "bb-plugin-dynamic-file-tree",
+      "include-component-in-tag": true,
+      "tag-separator": "/",
+      "changelog-path": "CHANGELOG.md"
+    }
+  }
+}

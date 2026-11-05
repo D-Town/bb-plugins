@@ -1,0 +1,52 @@
+name: Bug report
+description: Report a reproducible problem with a BB plugin.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve the plugin. Please avoid posting secrets,
+        private paths, or sensitive project content.
+  - type: input
+    id: plugin
+    attributes:
+      label: Plugin
+      description: Which plugin is affected?
+      placeholder: Dynamic File Tree
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Tell us what went wrong and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open ...
+        2. Click ...
+        3. See ...
+    validations:
+      required: true
+  - type: input
+    id: bb-version
+    attributes:
+      label: BB version
+      placeholder: 0.48.0
+  - type: input
+    id: operating-system
+    attributes:
+      label: Operating system
+      placeholder: macOS 15.5
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs or screenshots
+      description: Remove secrets and private project information before posting.
+      render: shell
