@@ -321,6 +321,64 @@ describe("explorer row presentation and preview", () => {
 });
 
 describe("file change refresh", () => {
+  it("keeps omitted cached rows visible, selected and focused during a truncated refresh", async () => {
+    let refresh = false;
+    const view = mount({
+      tree_list: ({ path }) => refresh ? { ...available(path ?? "", [file("new.ts")]), truncated: true } : available(path ?? ""),
+    });
+    fireEvent.click(await view.findByRole("button", { name: "src" }));
+    await view.findByRole("button", { name: "app.ts" });
+    fireEvent.click(view.getByRole("button", { name: ".gitignore" }));
+    const selected = view.getByRole("treeitem", { name: ".gitignore" });
+    expect(document.activeElement).toBe(selected);
+    refresh = true;
+    await update(view, [{ activityId: "write", path: "new.ts", kind: "write", status: "completed" }]);
+    await view.findByText("Showing the first 10,000 paths.");
+    expect(view.getByRole("treeitem", { name: ".gitignore" })).toBe(selected);
+    expect(selected.getAttribute("aria-selected")).toBe("true");
+    expect(document.activeElement).toBe(selected);
+    expect(selected.tabIndex).toBe(0);
+    expect(view.getByRole("button", { name: "app.ts" })).toBeTruthy();
+    expect(view.getByRole("button", { name: "src" }).getAttribute("aria-expanded")).toBe("true");
+    expect(view.getByRole("button", { name: "new.ts" })).toBeTruthy();
+    expect(requests(view).map(({ path }) => path)).toEqual(["", "src", ""]);
+  });
+
+  it.each(["before recreation", "after fresh request"])("rejects invalidated directory responses resolving %s", async (resolution) => {
+    const old = deferred<ListTreeOutput>();
+    const fresh = deferred<ListTreeOutput>();
+    let removed = false;
+    let childRequests = 0;
+    const view = mount({ tree_list: ({ path }) => path === "src"
+      ? ++childRequests === 1 ? old.promise : fresh.promise
+      : available(path ?? "", removed ? [file(".gitignore")] : listings[""]),
+    });
+    fireEvent.click(await view.findByRole("button", { name: "src" }));
+    await view.findByRole("status", { name: "Loading src" });
+    removed = true;
+    await update(view, [{ activityId: "delete", path: "src", kind: "write", status: "completed" }]);
+    await waitFor(() => expect(view.queryByRole("button", { name: "src" })).toBeNull());
+    if (resolution === "before recreation") {
+      await act(async () => old.resolve(available("src", [file("src/old.ts")])));
+    }
+    removed = false;
+    await update(view, [{ activityId: "recreate", path: "src", kind: "write", status: "completed" }], 2);
+    fireEvent.click(await view.findByRole("button", { name: "src" }));
+    expect(requests(view).map(({ path }) => path)).toEqual(["", "src", "", "", "src"]);
+    if (resolution === "after fresh request") {
+      await act(async () => old.resolve(available("src", [file("src/old.ts")])));
+    }
+    expect(view.queryByRole("button", { name: "old.ts" })).toBeNull();
+    expect(view.getByRole("status", { name: "Loading src" })).toBeTruthy();
+    await act(async () => fresh.resolve(available("src", [file("src/new.ts")])));
+    expect(view.getByRole("button", { name: "new.ts" })).toBeTruthy();
+    expect(view.queryByRole("button", { name: "old.ts" })).toBeNull();
+    fireEvent.click(view.getByRole("button", { name: "src" }));
+    fireEvent.click(view.getByRole("button", { name: "src" }));
+    expect(view.getByRole("button", { name: "new.ts" })).toBeTruthy();
+    expect(requests(view)).toHaveLength(5);
+  });
+
   it("does not overwrite fresher directory annotations with a late Git refresh", async () => {
     const annotations = deferred<{ gitAvailable: "available"; entries: { path: string }[] }>();
     let changed = false;

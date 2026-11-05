@@ -104,7 +104,7 @@ function ContextExplorer({ threadId, environmentId }: { threadId: string; enviro
   const [focusedPath, setFocusedPath] = useState<string | null>(null);
   const rows = useRef(new Map<string, HTMLDivElement>());
   const treeHasFocus = useRef(false);
-  const inFlightDirectories = useRef(new Set<string>());
+  const inFlightDirectories = useRef(new Map<string, symbol>());
   const refreshAgain = useRef(new Set<string>());
   const pendingWrites = useRef(new Map<string, string>());
   const completedWrites = useRef(new Set<string>());
@@ -124,8 +124,12 @@ function ContextExplorer({ threadId, environmentId }: { threadId: string; enviro
       return;
     }
     if (cached !== undefined && !retry) return;
-    inFlightDirectories.current.add(path);
+    // The token identifies this incarnation of the branch, including its in-flight cleanup.
+    const request = Symbol(path);
+    inFlightDirectories.current.set(path, request);
+    const isCurrentRequest = () => mounted.current && inFlightDirectories.current.get(path) === request;
     const save = (directory: DirectoryState) => {
+      if (!isCurrentRequest()) return;
       updateState((current) => ({
         ...current,
         directories: new Map(current.directories).set(path, directory),
@@ -136,15 +140,26 @@ function ContextExplorer({ threadId, environmentId }: { threadId: string; enviro
       ? { ...cached, refreshing: true, refreshError: undefined } : { status: "loading" });
     rpc.call("tree_list", { environmentId, path }).then(
       (result) => {
-        if (!mounted.current) return;
+        if (!isCurrentRequest()) return;
         if (result.outcome === "unavailable" && cached?.status === "loaded" && cached.result.outcome === "available") {
           save({ ...cached, refreshing: false, refreshError: "Directory refresh unavailable." });
           return;
         }
         updateState((current) => {
+          const previous = current.directories.get(path);
+          if (result.outcome === "available" && result.truncated && previous?.status === "loaded" && previous.result.outcome === "available") {
+            // An incomplete listing can add/update rows, but cannot prove cached rows absent.
+            const entries = new Map(previous.result.entries.map((entry) => [entry.path, entry]));
+            for (const entry of result.entries) entries.set(entry.path, entry);
+            return { ...current, directories: new Map(current.directories).set(path, {
+              status: "loaded", result: { ...result, entries: [...entries.values()].sort((left, right) =>
+                left.kind !== right.kind ? left.kind === "directory" ? -1 : 1
+                  : left.name < right.name ? -1 : left.name > right.name ? 1 : 0),
+              },
+            }) };
+          }
           const directories = new Map(current.directories).set(path, { status: "loaded", result } as DirectoryState);
           if (result.outcome !== "available" || result.truncated) return { ...current, directories };
-          const previous = current.directories.get(path);
           const entriesByPath = new Map(result.entries.map((entry) => [entry.path, entry]));
           const removed = previous?.status === "loaded" && previous.result.outcome === "available"
             ? previous.result.entries.filter((old) => entriesByPath.get(old.path)?.kind !== old.kind).map((entry) => entry.path) : [];
@@ -157,7 +172,13 @@ function ContextExplorer({ threadId, environmentId }: { threadId: string; enviro
             const child = entriesByPath.get(path ? `${path}/${name}` : name);
             return child === undefined || (descendants.length > 0 && child.kind !== "directory");
           };
-          for (const directory of directories.keys()) if (missing(directory)) directories.delete(directory);
+          for (const directory of directories.keys()) {
+            if (!missing(directory)) continue;
+            directories.delete(directory);
+            // Removed descendants cannot publish late results or block a recreated branch's load.
+            inFlightDirectories.current.delete(directory);
+            refreshAgain.current.delete(directory);
+          }
           const selectionMissing = current.selectedPath !== null && missing(current.selectedPath);
           return {
             ...current, directories,
@@ -169,12 +190,13 @@ function ContextExplorer({ threadId, environmentId }: { threadId: string; enviro
         });
       },
       (cause: unknown) => {
-        if (!mounted.current) return;
+        if (!isCurrentRequest()) return;
         const message = cause instanceof Error ? cause.message : String(cause);
         save(cached?.status === "loaded" && cached.result.outcome === "available"
           ? { ...cached, refreshing: false, refreshError: message } : { status: "error", message });
       },
     ).finally(() => {
+      if (!isCurrentRequest()) return;
       inFlightDirectories.current.delete(path);
       if (refreshAgain.current.delete(path)) loadDirectory(path, true);
     });
