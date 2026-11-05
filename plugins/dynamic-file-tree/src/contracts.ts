@@ -40,6 +40,7 @@ const treeEntrySchema: z.ZodType<TreeEntry> = z.lazy(() =>
     path: z.string().min(1),
     name: z.string().min(1),
     kind: z.enum(["file", "directory"]),
+    hasChildren: z.boolean().optional(),
     children: z.array(treeEntrySchema).optional(),
     gitState: gitStateSchema.optional(),
   }),
@@ -47,18 +48,21 @@ const treeEntrySchema: z.ZodType<TreeEntry> = z.lazy(() =>
 
 export const listTreeInputSchema = z.object({
   environmentId: z.string().trim().min(1),
-  includeHidden: z.boolean().default(false),
+  path: z.string().default(""),
 });
 
 export const listTreeOutputSchema = z.discriminatedUnion("outcome", [
   z.object({
     outcome: z.literal("available"),
+    directory: z.string(),
     entries: z.array(treeEntrySchema).max(10_000),
+    gitAvailable: z.enum(["available", "not_applicable", "unavailable"]),
     truncated: z.boolean(),
   }),
   z.object({
     outcome: z.literal("unavailable"),
-    reason: z.enum(["no_workspace", "environment_unavailable"]),
+    directory: z.string().optional(),
+    reason: z.enum(["no_workspace", "environment_unavailable", "invalid_path", "directory_unavailable"]),
   }),
 ]);
 

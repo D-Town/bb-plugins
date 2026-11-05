@@ -90,6 +90,8 @@ describe("Dynamic File Tree app", () => {
           tree_list: () => ++calls === 1
             ? Promise.resolve({
               outcome: "available" as const,
+              directory: "",
+              gitAvailable: "available" as const,
               truncated: false,
               entries: [{ path: "old.md", name: "old.md", kind: "file" as const }],
             })
@@ -120,6 +122,8 @@ describe("Dynamic File Tree app", () => {
         rpc: {
           tree_list: async () => ({
             outcome: "available",
+            directory: "",
+            gitAvailable: "available",
             truncated: false,
             entries: [
               {

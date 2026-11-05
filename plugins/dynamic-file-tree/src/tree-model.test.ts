@@ -1,56 +1,55 @@
 import { describe, expect, it } from "vitest";
-import { buildTree, type ListedPath } from "./tree-model";
+import { buildTree } from "./tree-model";
 
 describe("buildTree", () => {
-  it("returns an empty tree for an empty listing", () => {
+  it("returns an empty listing", () => {
     expect(buildTree([])).toEqual([]);
   });
 
-  it("creates missing parents and sorts directories before files", () => {
-    const entries: ListedPath[] = [
-      { path: "src/zeta.ts", kind: "file" },
-      { path: "README.md", kind: "file" },
-      { path: "src/lib/parser.ts", kind: "file" },
+  it("sorts direct entries directory-first by name and preserves dotfiles", () => {
+    expect(buildTree([
+      { path: "z.ts", kind: "file" },
       { path: "src", kind: "directory" },
-    ];
-
-    expect(buildTree(entries)).toEqual([
-      { path: "src", name: "src", kind: "directory", children: [
-        { path: "src/lib", name: "lib", kind: "directory", children: [
-          { path: "src/lib/parser.ts", name: "parser.ts", kind: "file" },
-        ] },
-        { path: "src/zeta.ts", name: "zeta.ts", kind: "file" },
-      ] },
-      { path: "README.md", name: "README.md", kind: "file" },
+      { path: ".gitignore", kind: "file" },
+      { path: "assets", kind: "directory" },
+      { path: "README.md", kind: "file", gitState: "modified" },
+    ])).toEqual([
+      { path: "assets", name: "assets", kind: "directory" },
+      { path: "src", name: "src", kind: "directory" },
+      { path: ".gitignore", name: ".gitignore", kind: "file" },
+      { path: "README.md", name: "README.md", kind: "file", gitState: "modified" },
+      { path: "z.ts", name: "z.ts", kind: "file" },
     ]);
   });
 
-  it("preserves Git state on listed files", () => {
-    expect(
-      buildTree([{ path: "src/app.ts", kind: "file", gitState: "modified" }]),
-    ).toEqual([
-      {
-        path: "src",
-        name: "src",
-        kind: "directory",
-        children: [
-          {
-            path: "src/app.ts",
-            name: "app.ts",
-            kind: "file",
-            gitState: "modified",
-          },
-        ],
-      },
+  it("keeps unloaded and known-empty directories distinct without synthesizing children", () => {
+    expect(buildTree([
+      { path: "src", kind: "directory", hasChildren: true },
+      { path: "empty", kind: "directory", hasChildren: false },
+    ])).toEqual([
+      { path: "empty", name: "empty", kind: "directory", hasChildren: false },
+      { path: "src", name: "src", kind: "directory", hasChildren: true },
     ]);
   });
 
-  it("rejects absolute and traversal paths", () => {
-    expect(() => buildTree([{ path: "../secrets.txt", kind: "file" }])).toThrow(
-      "workspace-relative",
-    );
-    expect(() => buildTree([{ path: "/etc/passwd", kind: "file" }])).toThrow(
-      "workspace-relative",
-    );
+  it("keeps nested direct entries project-relative without creating parent nodes", () => {
+    expect(buildTree([{ path: "src/app.ts", kind: "file", gitState: "added" }])).toEqual([
+      { path: "src/app.ts", name: "app.ts", kind: "file", gitState: "added" },
+    ]);
   });
+
+  it("deduplicates exact paths without merging entries with shared prefixes", () => {
+    expect(buildTree([
+      { path: "src", kind: "directory" },
+      { path: "src-other", kind: "directory" },
+      { path: "src", kind: "directory" },
+      { path: "src.ts", kind: "file" },
+    ]).map((entry) => entry.path)).toEqual(["src", "src-other", "src.ts"]);
+  });
+
+  it.each(["/absolute", "a/../b", "a//b", "a/./b", "a\\b", "../secret", "", "C:/secret", "a\0b"])(
+    "rejects unsafe project-relative path %j", (path) => {
+      expect(() => buildTree([{ path, kind: "file" }])).toThrow("workspace-relative");
+    },
+  );
 });

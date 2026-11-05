@@ -44,7 +44,7 @@ function ContextFileTreeTab(props: ExperimentalThreadTabProps) {
     rpc
       .call("tree_list", {
         environmentId,
-        includeHidden: false,
+        path: "",
       })
       .then(
         (next) => {
