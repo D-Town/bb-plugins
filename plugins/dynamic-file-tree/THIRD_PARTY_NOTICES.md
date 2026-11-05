@@ -2,20 +2,8 @@
 
 ## Claude Code Filetree
 
-This plugin is inspired by and may contain copied portions of
+This plugin is inspired by
 [`data-goblin/claude-code-filetree`](https://github.com/data-goblin/claude-code-filetree).
-
-The upstream project is distributed under the MIT License. Its copyright and
-license notice must remain with any copied code or asset:
-
-```text
-MIT License
-
-Copyright (c) 2026 Kurt Buhler
-```
-
-The complete upstream license is available in the linked repository's
-`LICENSE` file.
-
-Any additional copied asset will be listed here with its source and license
-before it is shipped.
+No upstream code or assets are copied into this plugin. The upstream project is
+distributed under the MIT License; the link is retained as an inspiration and
+credit reference.

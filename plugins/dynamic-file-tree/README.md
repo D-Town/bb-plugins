@@ -46,5 +46,5 @@ upgrading BB so the package tracks the host SDK.
 
 The interaction concept is inspired by
 [`data-goblin/claude-code-filetree`](https://github.com/data-goblin/claude-code-filetree).
-Any copied code or assets retain their original notices; see
-`THIRD_PARTY_NOTICES.md`.
+No upstream code or assets are copied into this plugin; see
+`THIRD_PARTY_NOTICES.md` for the credit note.
