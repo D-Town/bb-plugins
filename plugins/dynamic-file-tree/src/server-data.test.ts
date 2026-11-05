@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { fileURLToPath } from "node:url";
 import { createFakePluginHost, experimental_scanPublicSdkOnly } from "@get-bb/plugin-sdk/testing";
 import plugin from "../server";
-import { listTreeInputSchema } from "./contracts";
+import { listTreeInputSchema, rpcContract } from "./contracts";
 import { createServerData } from "./server-data";
 
 const disposals: Array<() => Promise<void>> = [];
@@ -143,4 +143,86 @@ it("uses only public SDK and declared package imports", () => {
   });
   expect(scan.violations).toEqual([]);
   expect(scan.privateDependencies).toEqual([]);
+});
+
+describe("bounded fallback preview", () => {
+  it("exposes completed file changes for invalidation even when the pending row was missed", async () => {
+    const { bb, harness } = setup();
+    harness.sdk.stub("threads.timeline", async () => ({ rows: [{
+      id: "turn", kind: "turn", status: "completed", children: [
+        { id: "write_1", kind: "work", workKind: "file-change", status: "completed", change: { path: "src/new.ts" } },
+        { id: "unsafe", kind: "work", workKind: "file-change", status: "completed", change: { path: "../secret" } },
+      ],
+    }] } as never));
+    await plugin(bb);
+    expect(await harness.behavior.callRpc("activity_snapshot", { threadId: "thread_1" })).toEqual({
+      available: true, activities: [{ activityId: "write_1", path: "src/new.ts", kind: "write", status: "completed" }],
+    });
+  });
+
+  it.each([
+    { workspace: null, reason: "no_workspace" },
+    { environmentError: true, reason: "environment_unavailable" },
+  ])("does not read fallback files without a workspace: $reason", async ({ reason, ...options }) => {
+    const { bb, harness } = setup(options);
+    await plugin(bb);
+    expect(await harness.behavior.callRpc("file_preview", { environmentId: "env_1", path: "app.ts" })).toEqual({ outcome: "unavailable", reason });
+    expect(harness.inspection.sdk.callsTo("files.read")).toHaveLength(0);
+  });
+
+  it("uses the remote Windows workspace syntax for fallback reads", async () => {
+    const { bb, harness } = setup({ workspace: "C:\\repo" });
+    harness.sdk.stub("files.read", async () => ({ path: "C:\\repo\\src\\app.ts", content: "test", contentEncoding: "utf8", sizeBytes: 4, sha256: "sha" }));
+    await plugin(bb);
+    expect(await harness.behavior.callRpc("file_preview", { environmentId: "env_1", path: "src/app.ts" })).toEqual({ outcome: "available", path: "src/app.ts", content: "test" });
+    expect(harness.inspection.sdk.callsTo("files.read")[0]?.[0]).toEqual({ hostId: "remote_host", rootPath: "C:\\repo", path: "C:\\repo\\src\\app.ts" });
+  });
+
+  it("reads through the selected remote environment with explicit containment and returns text", async () => {
+    const { bb, harness } = setup();
+    harness.sdk.stub("files.read", async () => ({ path: "/workspace/project/.gitignore", content: "node_modules/", contentEncoding: "utf8", sizeBytes: 13, sha256: "sha" }));
+    await plugin(bb);
+    expect(await harness.behavior.callRpc("file_preview", { environmentId: "env_1", path: ".gitignore" })).toEqual({ outcome: "available", path: ".gitignore", content: "node_modules/" });
+    expect(harness.inspection.sdk.callsTo("files.read")[0]?.[0]).toEqual({ hostId: "remote_host", rootPath: "/workspace/project", path: "/workspace/project/.gitignore" });
+  });
+
+  it.each([
+    { content: "A".repeat(65_537), contentEncoding: "utf8", sizeBytes: 65_537, reason: "too_large" },
+    { content: "é".repeat(40_000), contentEncoding: "utf8", sizeBytes: 1, reason: "too_large" },
+    { content: "AA==", contentEncoding: "base64", sizeBytes: 1, reason: "unsupported" },
+    { content: "a\0b", contentEncoding: "utf8", sizeBytes: 3, reason: "unsupported" },
+    { content: "<svg/>", contentEncoding: "utf8", sizeBytes: 6, mimeType: "image/svg+xml", reason: "unsupported" },
+  ])("returns $reason without transporting unsupported or oversized content", async ({ reason, ...read }) => {
+    const { bb, harness } = setup();
+    harness.sdk.stub("files.read", async () => ({ ...read, contentEncoding: read.contentEncoding as "utf8" | "base64", path: "/workspace/project/file", sha256: "sha" }));
+    await plugin(bb);
+    expect(await harness.behavior.callRpc("file_preview", { environmentId: "env_1", path: "file" })).toEqual({ outcome: "unavailable", reason });
+  });
+
+  it.each(["../secret", "/absolute", "a\\b", "a/../secret"])("rejects %j without reading any file", async (path) => {
+    const { bb, harness } = setup();
+    await plugin(bb);
+    expect(await harness.behavior.callRpc("file_preview", { environmentId: "env_1", path })).toEqual({ outcome: "unavailable", reason: "invalid_path" });
+    expect(harness.inspection.sdk.callsTo("files.read")).toHaveLength(0);
+  });
+
+  it("bounds preview RPC input/output and refuses unknown fields", () => {
+    expect(rpcContract.file_preview.input.safeParse({ environmentId: "env_1", path: "file", rootPath: "/elsewhere" }).success).toBe(false);
+    expect(rpcContract.file_preview.output.safeParse({ outcome: "available", path: "file", content: "a".repeat(65_537) }).success).toBe(false);
+  });
+});
+
+describe("Git annotation refresh", () => {
+  it("refreshes requested cached paths without listing directories", async () => {
+    const { bb, harness } = setup();
+    await plugin(bb);
+    expect(await harness.behavior.callRpc("tree_git", { environmentId: "env_1", paths: ["src", "src/app.ts", ".gitignore", "clean.md"] })).toEqual({
+      gitAvailable: "available", entries: [
+        { path: "src", gitState: "modified" }, { path: "src/app.ts", gitState: "modified" },
+        { path: ".gitignore", gitState: "untracked" }, { path: "clean.md" },
+      ],
+    });
+    expect(harness.inspection.sdk.callsTo("hosts.directory")).toHaveLength(0);
+    expect(harness.inspection.sdk.callsTo("plugins.callRpc")[0]?.[0]).toMatchObject({ input: { environmentId: "env_1" } });
+  });
 });

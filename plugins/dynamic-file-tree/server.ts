@@ -10,6 +10,8 @@ export default async function plugin(bb: BbPluginApi) {
   bb.rpc.register(rpcContract, {
     activity_snapshot: (input) => data.activitySnapshot(input),
     tree_list: (input) => data.listTree(input),
+    file_preview: (input) => data.filePreview(input),
+    tree_git: (input) => data.treeGit(input),
   });
 
   bb.events.on("experimental_thread.events", async ({ thread, sequence }) => {

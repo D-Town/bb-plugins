@@ -1,21 +1,22 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
-import { useBbNavigate, useRealtime, useRealtimeConnectionState, useRpc } from "@get-bb/plugin-sdk/app";
+import { experimental_Icon as Icon, useBbNavigate, useRealtime, useRealtimeConnectionState, useRpc } from "@get-bb/plugin-sdk/app";
 import type { ExperimentalThreadTabProps } from "@get-bb/plugin-sdk/app";
 import { activeAncestorPaths } from "../activity-model";
 import { activityUpdatedSchema, rpcContract } from "../contracts";
-import type { ActivitySnapshotOutput, ListTreeOutput, TreeEntry } from "../contracts";
+import type { ActivitySnapshotOutput, FilePreviewOutput, ListTreeOutput, TreeEntry } from "../contracts";
 
 type DirectoryState =
   | { status: "loading" }
   | { status: "error"; message: string }
-  | { status: "loaded"; result: ListTreeOutput };
+  | { status: "loaded"; result: ListTreeOutput; refreshing?: boolean; refreshError?: string };
 
 interface ExplorerState {
   manualExpanded: ReadonlySet<string>;
   autoExpanded: ReadonlySet<string>;
   selectedPath: string | null;
   directories: ReadonlyMap<string, DirectoryState>;
+  preview: { path: string; result: FilePreviewOutput | null } | null;
 }
 
 const gitStateLabels: Record<NonNullable<TreeEntry["gitState"]>, string> = {
@@ -26,6 +27,45 @@ const gitStateLabels: Record<NonNullable<TreeEntry["gitState"]>, string> = {
   renamed: "renamed",
   untracked: "untracked",
 };
+const gitMarkers = { clean: "", modified: "M", added: "A", deleted: "D", renamed: "R", untracked: "U" };
+const fileIcons: Record<string, string> = {
+  ts: "FileCode", tsx: "FileCode", js: "FileCode", jsx: "FileCode", py: "FileCode", rs: "FileCode", go: "FileCode",
+  md: "FileText", mdx: "FileText", txt: "FileText", rst: "FileText",
+  png: "Image", jpg: "Image", jpeg: "Image", gif: "Image", svg: "Image", webp: "Image", ico: "Image",
+  json: "Settings", yaml: "Settings", yml: "Settings", toml: "Settings",
+};
+function entryIcon(entry: TreeEntry, expanded: boolean) {
+  if (entry.kind === "directory") return expanded ? "FolderOpen" : "Folder";
+  if ([".gitignore", ".gitattributes", ".editorconfig", ".npmrc", ".env"].includes(entry.name.toLowerCase())) return "Settings";
+  return fileIcons[entry.name.split(".").at(-1)!.toLowerCase()] ?? "File";
+}
+const previewErrors: Record<Extract<FilePreviewOutput, { outcome: "unavailable" }>["reason"], string> = {
+  unsupported: "Unsupported file type for inline preview. Open this file in BB's preview-capable surface.",
+  too_large: "This file is too large for inline preview (64 KiB limit).",
+  invalid_path: "This file path is unavailable.",
+  no_workspace: "No workspace is available for preview.",
+  environment_unavailable: "The workspace is currently unavailable.",
+  file_unavailable: "This file could not be previewed.",
+};
+
+// Scoped styles keep host typography/colors and the tree's roving focus model.
+const explorerStyles = `
+.dynamic-file-tree { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; font-size: 12px; padding: 4px 0; }
+.dynamic-file-tree .file-tree-entry { display: flex; align-items: center; gap: 6px; width: 100%; min-width: 0; height: 26px; padding: 0 8px 0 4px; border: 0; border-radius: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.dynamic-file-tree .file-tree-entry:hover { background: var(--muted, color-mix(in srgb, currentColor 7%, transparent)); }
+.dynamic-file-tree [role=treeitem][aria-selected=true] > .file-tree-entry { background: var(--accent, color-mix(in srgb, currentColor 12%, transparent)); }
+.dynamic-file-tree [role=treeitem]:focus { outline: none; }
+.dynamic-file-tree [role=treeitem]:focus-visible > .file-tree-entry { outline: 1px solid var(--ring, currentColor); outline-offset: -1px; }
+.dynamic-file-tree .file-tree-icon { width: 14px; height: 14px; flex: 0 0 14px; opacity: .8; }
+.dynamic-file-tree .file-tree-chevron { width: 12px; height: 12px; flex: 0 0 12px; }
+.dynamic-file-tree .file-tree-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dynamic-file-tree .file-tree-git-state { margin-left: auto; padding-left: 8px; font-size: 11px; font-weight: 600; }
+.dynamic-file-tree [data-git=modified], .dynamic-file-tree [data-git=renamed] { color: var(--warning, #ad7900); }
+.dynamic-file-tree [data-git=added], .dynamic-file-tree [data-git=untracked] { color: var(--success, #38854b); }
+.dynamic-file-tree [data-git=deleted] { color: var(--destructive, #cf4545); }
+.dynamic-file-tree .file-tree-preview { border-top: 1px solid var(--border, color-mix(in srgb, currentColor 16%, transparent)); margin-top: 8px; padding: 8px; }
+.dynamic-file-tree .file-tree-preview pre { max-height: 320px; overflow: auto; font: inherit; white-space: pre; }
+`;
 
 function StatusMessage({ children, label }: { children: ReactNode; label?: string }) {
   return (
@@ -55,6 +95,7 @@ function ContextExplorer({ threadId, environmentId }: { threadId: string; enviro
     autoExpanded: new Set(),
     selectedPath: null,
     directories: new Map(),
+    preview: null,
   }));
   // Synchronous cache access also deduplicates requests before React commits.
   const stateRef = useRef(state);
@@ -63,39 +104,132 @@ function ContextExplorer({ threadId, environmentId }: { threadId: string; enviro
   const [focusedPath, setFocusedPath] = useState<string | null>(null);
   const rows = useRef(new Map<string, HTMLDivElement>());
   const treeHasFocus = useRef(false);
+  const inFlightDirectories = useRef(new Set<string>());
+  const refreshAgain = useRef(new Set<string>());
+  const pendingWrites = useRef(new Map<string, string>());
+  const completedWrites = useRef(new Set<string>());
+  const gitRequest = useRef(0);
+  const previewRequest = useRef(0);
   const updateState = useCallback((change: (current: ExplorerState) => ExplorerState) => {
     const next = change(stateRef.current);
     stateRef.current = next;
     setState(next);
   }, []);
 
-  const loadDirectory = useCallback((path: string, retry = false) => {
+  const loadDirectory = useCallback((path: string, retry = false): void => {
     if (!mounted.current) return;
     const cached = stateRef.current.directories.get(path);
-    if (cached?.status === "loading" || (cached !== undefined && !retry)) return;
+    if (inFlightDirectories.current.has(path)) {
+      if (retry) refreshAgain.current.add(path);
+      return;
+    }
+    if (cached !== undefined && !retry) return;
+    inFlightDirectories.current.add(path);
     const save = (directory: DirectoryState) => {
       updateState((current) => ({
         ...current,
         directories: new Map(current.directories).set(path, directory),
       }));
     };
-    save({ status: "loading" });
+    // Keep existing rows mounted during refresh so focus/selection do not blink.
+    save(cached?.status === "loaded" && cached.result.outcome === "available"
+      ? { ...cached, refreshing: true, refreshError: undefined } : { status: "loading" });
     rpc.call("tree_list", { environmentId, path }).then(
       (result) => {
-        if (mounted.current) save({ status: "loaded", result });
+        if (!mounted.current) return;
+        if (result.outcome === "unavailable" && cached?.status === "loaded" && cached.result.outcome === "available") {
+          save({ ...cached, refreshing: false, refreshError: "Directory refresh unavailable." });
+          return;
+        }
+        updateState((current) => {
+          const directories = new Map(current.directories).set(path, { status: "loaded", result } as DirectoryState);
+          if (result.outcome !== "available" || result.truncated) return { ...current, directories };
+          const previous = current.directories.get(path);
+          const entriesByPath = new Map(result.entries.map((entry) => [entry.path, entry]));
+          const removed = previous?.status === "loaded" && previous.result.outcome === "available"
+            ? previous.result.entries.filter((old) => entriesByPath.get(old.path)?.kind !== old.kind).map((entry) => entry.path) : [];
+          const missing = (candidate: string) => {
+            if (removed.some((removed) => candidate === removed || candidate.startsWith(`${removed}/`))) return true;
+            // A previous truncated result might not have included this selected/cached path.
+            const relative = path === "" ? candidate : candidate.startsWith(`${path}/`) ? candidate.slice(path.length + 1) : "";
+            if (!relative) return false;
+            const [name, ...descendants] = relative.split("/");
+            const child = entriesByPath.get(path ? `${path}/${name}` : name);
+            return child === undefined || (descendants.length > 0 && child.kind !== "directory");
+          };
+          for (const directory of directories.keys()) if (missing(directory)) directories.delete(directory);
+          const selectionMissing = current.selectedPath !== null && missing(current.selectedPath);
+          return {
+            ...current, directories,
+            manualExpanded: new Set([...current.manualExpanded].filter((candidate) => !missing(candidate))),
+            autoExpanded: new Set([...current.autoExpanded].filter((candidate) => !missing(candidate))),
+            selectedPath: selectionMissing ? null : current.selectedPath,
+            preview: selectionMissing ? null : current.preview,
+          };
+        });
       },
       (cause: unknown) => {
-        if (mounted.current) save({ status: "error", message: cause instanceof Error ? cause.message : String(cause) });
+        if (!mounted.current) return;
+        const message = cause instanceof Error ? cause.message : String(cause);
+        save(cached?.status === "loaded" && cached.result.outcome === "available"
+          ? { ...cached, refreshing: false, refreshError: message } : { status: "error", message });
       },
-    );
+    ).finally(() => {
+      inFlightDirectories.current.delete(path);
+      if (refreshAgain.current.delete(path)) loadDirectory(path, true);
+    });
   }, [environmentId, rpc, updateState]);
+
+  const refreshChangedPaths = useCallback((paths: string[]) => {
+    const parents = new Set<string>();
+    for (const path of paths) {
+      let parent = path.slice(0, Math.max(0, path.lastIndexOf("/")));
+      while (parent && !stateRef.current.directories.has(parent)) parent = parent.slice(0, Math.max(0, parent.lastIndexOf("/")));
+      if (stateRef.current.directories.has(parent)) parents.add(parent);
+    }
+    const requestedEntries = new Map([...stateRef.current.directories.values()].flatMap((directory) =>
+      directory.status === "loaded" && directory.result.outcome === "available" ? directory.result.entries.map((entry) => [entry.path, entry] as const) : []));
+    const annotationPaths = [...requestedEntries.keys()];
+    for (const parent of parents) loadDirectory(parent, true);
+    const request = ++gitRequest.current;
+    // Each directory is bounded; several manually opened directories can exceed one RPC batch.
+    for (let offset = 0; offset < annotationPaths.length; offset += 10_000) {
+      rpc.call("tree_git", { environmentId, paths: annotationPaths.slice(offset, offset + 10_000) }).then((annotations) => {
+        if (!mounted.current || request !== gitRequest.current) return;
+        const states = new Map(annotations.entries.map((entry) => [entry.path, entry.gitState]));
+        updateState((current) => ({ ...current, directories: new Map([...current.directories].map(([path, directory]) => {
+          if (directory.status !== "loaded" || directory.result.outcome !== "available") return [path, directory];
+          return [path, { ...directory, result: { ...directory.result, gitAvailable: annotations.gitAvailable,
+            // A directory listing may have supplied fresher annotations while this request ran.
+            entries: directory.result.entries.map((entry) => states.has(entry.path) && entry === requestedEntries.get(entry.path) ? { ...entry, gitState: states.get(entry.path) } : entry),
+          } }];
+        })) }));
+      }, () => { /* Annotation failure must not disturb file membership. */ });
+    }
+  }, [environmentId, loadDirectory, rpc, updateState]);
 
   const applyActivity = useCallback((snapshot: ActivitySnapshotOutput) => {
     updateState((current) => ({
       ...current,
       autoExpanded: new Set(snapshot.available ? activeAncestorPaths(snapshot.activities) : []),
     }));
-  }, [updateState]);
+    if (!snapshot.available) return; // Preserve write tracking through connection/timeline outages.
+    const writes = snapshot.activities.filter((activity) => activity.kind === "write");
+    const pending = new Map(writes.filter((activity) => activity.status === "pending").map((activity) => [JSON.stringify([activity.activityId, activity.path]), activity.path]));
+    const changed = new Set<string>();
+    for (const [id, path] of pendingWrites.current) {
+      if (!pending.has(id)) { changed.add(path); completedWrites.current.add(id); }
+    }
+    for (const activity of writes) {
+      const id = JSON.stringify([activity.activityId, activity.path]);
+      if (activity.status !== "pending" && !completedWrites.current.has(id)) {
+        changed.add(activity.path);
+        completedWrites.current.add(id);
+      }
+    }
+    pendingWrites.current = pending;
+    if (changed.size) refreshChangedPaths([...changed]);
+  }, [refreshChangedPaths, updateState]);
 
   useRealtime("activity-updated", (payload) => {
     const parsed = activityUpdatedSchema.safeParse(payload);
@@ -160,11 +294,20 @@ function ContextExplorer({ threadId, environmentId }: { threadId: string; enviro
   };
 
   const select = (path: string) => {
-    updateState((current) => ({ ...current, selectedPath: path }));
-    navigate.experimental_openFilePreview({
+    const request = ++previewRequest.current;
+    updateState((current) => ({ ...current, selectedPath: path, preview: null }));
+    const accepted = navigate.experimental_openFilePreview({
       target: { kind: "workspace", environmentId, path },
       location: null,
     });
+    if (accepted) return;
+    updateState((current) => ({ ...current, preview: { path, result: null } }));
+    const savePreview = (result: FilePreviewOutput) => {
+      if (!mounted.current || request !== previewRequest.current) return;
+      updateState((current) => current.preview?.path === path && current.selectedPath === path
+        ? { ...current, preview: { path, result } } : current);
+    };
+    rpc.call("file_preview", { environmentId, path }).then(savePreview, () => savePreview({ outcome: "unavailable", reason: "file_unavailable" }));
   };
 
   const isExpanded = (path: string) => state.manualExpanded.has(path) || state.autoExpanded.has(path);
@@ -222,7 +365,7 @@ function ContextExplorer({ threadId, environmentId }: { threadId: string; enviro
           toggle(entry.path);
         } else {
           const cached = state.directories.get(entry.path);
-          if (cached?.status === "error" || (cached?.status === "loaded" && cached.result.outcome === "unavailable")) {
+          if (cached?.status === "error" || (cached?.status === "loaded" && (cached.result.outcome === "unavailable" || cached.refreshError))) {
             loadDirectory(entry.path, true);
           } else if (visibleRows[index + 1]?.parent === entry.path) {
             focusRow(visibleRows[index + 1].entry.path);
@@ -285,12 +428,14 @@ function ContextExplorer({ threadId, environmentId }: { threadId: string; enviro
     }
     const { entries, truncated } = cached.result;
     return <>
+      {cached.refreshing ? <StatusMessage label={`Refreshing ${path || "files"}`}>Refreshing…</StatusMessage> : null}
+      {cached.refreshError ? <div role="alert">Could not refresh {path || "files"}. <button type="button" tabIndex={path ? -1 : 0} onClick={() => loadDirectory(path, true)}>Retry refresh</button></div> : null}
       {entries.length === 0 ? <StatusMessage>No files found.</StatusMessage> : entries.map((entry) => {
         const isDirectory = entry.kind === "directory";
         const expanded = isExpanded(entry.path);
         const selected = state.selectedPath === entry.path;
         const children = state.directories.get(entry.path);
-        const failed = children?.status === "error" || (children?.status === "loaded" && children.result.outcome === "unavailable");
+        const failed = children?.status === "error" || (children?.status === "loaded" && (children.result.outcome === "unavailable" || children.refreshError));
         return <div
           key={entry.path}
           ref={(element) => {
@@ -303,7 +448,10 @@ function ContextExplorer({ threadId, environmentId }: { threadId: string; enviro
           aria-level={depth + 1}
           aria-expanded={isDirectory ? expanded : undefined}
           aria-selected={selected}
-          aria-description={isDirectory && expanded && failed ? "Could not load children. Press ArrowRight to retry." : undefined}
+          aria-description={[
+            entry.gitState && entry.gitState !== "clean" ? `Git: ${gitStateLabels[entry.gitState]}.` : "",
+            isDirectory && expanded && failed ? "Could not load children. Press ArrowRight to retry." : "",
+          ].filter(Boolean).join(" ") || undefined}
           onFocus={(event) => {
             if (event.target === event.currentTarget) setFocusedPath(entry.path);
           }}
@@ -314,6 +462,7 @@ function ContextExplorer({ threadId, environmentId }: { threadId: string; enviro
             tabIndex={-1}
             aria-label={entry.name}
             aria-expanded={isDirectory ? expanded : undefined}
+            title={entry.path}
             onClick={() => {
               focusRow(entry.path);
               if (isDirectory) toggle(entry.path);
@@ -322,9 +471,10 @@ function ContextExplorer({ threadId, environmentId }: { threadId: string; enviro
             style={{ paddingLeft: `${depth * 14 + 4}px` }}
             className="file-tree-entry"
           >
-            <span aria-hidden="true">{isDirectory ? (expanded ? "▾" : "▸") : "·"}</span>
-            <span>{entry.name}</span>
-            {!isDirectory && entry.gitState !== undefined ? <span className="file-tree-git-state">{gitStateLabels[entry.gitState]}</span> : null}
+            {isDirectory ? <Icon name={expanded ? "ChevronDown" : "ChevronRight"} aria-hidden="true" className="file-tree-chevron" /> : <span aria-hidden="true" className="file-tree-chevron" />}
+            <Icon name={entryIcon(entry, expanded)} fallback="File" aria-hidden="true" className="file-tree-icon" />
+            <span className="file-tree-name">{entry.name}</span>
+            {entry.gitState && entry.gitState !== "clean" ? <span aria-hidden="true" data-git={entry.gitState} title={`Git: ${gitStateLabels[entry.gitState]}`} className="file-tree-git-state">{gitMarkers[entry.gitState]}</span> : null}
           </button>
           {isDirectory && expanded ? <div role="group">{renderDirectory(entry.path, depth + 1)}</div> : null}
         </div>;
@@ -333,10 +483,19 @@ function ContextExplorer({ threadId, environmentId }: { threadId: string; enviro
     </>;
   }
 
-  return <div role="tree" aria-label="Project files"
+  return <div className="dynamic-file-tree">
+    <style>{explorerStyles}</style>
+    <div role="tree" aria-label="Project files"
     onFocusCapture={() => { treeHasFocus.current = true; }}
     onBlurCapture={(event) => {
       if (!event.currentTarget.contains(event.relatedTarget)) treeHasFocus.current = false;
     }}
-  >{renderDirectory("", 0)}</div>;
+  >{renderDirectory("", 0)}</div>
+    {state.preview ? <section aria-label="File preview" className="file-tree-preview">
+      <div title={state.preview.path}>{state.preview.path}</div>
+      {state.preview.result === null ? <StatusMessage>Loading preview…</StatusMessage>
+        : state.preview.result.outcome === "available" ? <pre tabIndex={0} aria-label={`Preview of ${state.preview.path}`}>{state.preview.result.content}</pre>
+          : <div role="status">{previewErrors[state.preview.result.reason]}</div>}
+    </section> : null}
+  </div>;
 }

@@ -1,7 +1,9 @@
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import { posix, win32 } from "node:path";
 import { assertWorkspaceRelative, buildTree, type ListedPath, type GitState } from "./tree-model";
-import type { ActivitySnapshotInput, ActivitySnapshotOutput, ListTreeInput, ListTreeOutput } from "./contracts";
+import type { ActivePathActivity, ActivitySnapshotInput, ActivitySnapshotOutput, ListTreeInput, ListTreeOutput } from "./contracts";
+import { PREVIEW_MAX_BYTES } from "./contracts";
+import type { FilePreviewInput, FilePreviewOutput, TreeGitInput, TreeGitOutput } from "./contracts";
 import { collectActiveActivities } from "./activity-model";
 import { z } from "zod";
 
@@ -59,7 +61,123 @@ function mapGitState(changeKind: z.infer<typeof gitFileSchema>["changeKind"], or
   }
 }
 
+const finishedChangeSchema = z.object({
+  id: z.string().min(1), kind: z.literal("work"), workKind: z.literal("file-change"),
+  status: z.enum(["completed", "error", "interrupted"]), change: z.object({ path: z.string() }),
+});
+const turnChildrenSchema = z.object({ kind: z.literal("turn"), children: z.array(z.unknown()) });
+
+function completedFileChanges(rows: readonly unknown[]): ActivePathActivity[] {
+  const changes: ActivePathActivity[] = [];
+  for (const row of rows) {
+    const turn = turnChildrenSchema.safeParse(row);
+    if (turn.success) { changes.push(...completedFileChanges(turn.data.children)); continue; }
+    const parsed = finishedChangeSchema.safeParse(row);
+    if (!parsed.success) continue;
+    try {
+      assertWorkspaceRelative(parsed.data.change.path);
+      changes.push({ activityId: parsed.data.id, path: parsed.data.change.path, kind: "write", status: parsed.data.status });
+    } catch { /* Ignore invalid timeline paths at the same boundary as pending activity. */ }
+  }
+  return changes;
+}
+
 export function createServerData(bb: BbPluginApi) {
+  async function readGit(environmentId: string) {
+    // Git is optional annotation data. Its failure must not hide the directory.
+    let gitAvailable: "available" | "not_applicable" | "unavailable" = "unavailable";
+    const changed = new Map<string, GitState>();
+    const changedFolders = new Set<string>();
+    try {
+      const git = await bb.sdk.plugins.callRpc({
+        pluginId: "bb--git",
+        method: "files",
+        input: {
+          environmentId,
+          target: { type: "uncommitted" },
+          ignoreWhitespace: false,
+        },
+        outputSchema: gitFilesOutputSchema,
+      });
+      gitAvailable = git.outcome;
+      if (git.outcome === "available") {
+        for (const file of git.files) {
+          try {
+            const segments = assertWorkspaceRelative(file.path);
+            changed.set(file.path, mapGitState(file.changeKind, file.origin));
+            for (let i = 1; i < segments.length; i++) {
+              changedFolders.add(segments.slice(0, i).join("/"));
+            }
+            if (file.previousPath !== null) {
+              const previous = assertWorkspaceRelative(file.previousPath);
+              for (let i = 1; i < previous.length; i++) {
+                changedFolders.add(previous.slice(0, i).join("/"));
+              }
+            }
+          } catch {
+            // Ignore malformed annotation paths rather than polluting membership.
+          }
+        }
+      }
+    } catch {
+      // Keep the requested filesystem listing available without Git markers.
+    }
+
+    return { gitAvailable, changed, changedFolders };
+  }
+
+  async function treeGit(input: TreeGitInput): Promise<TreeGitOutput> {
+    try {
+      for (const path of input.paths) assertWorkspaceRelative(path);
+      const environment = await bb.sdk.environments.get({ environmentId: input.environmentId });
+      if (environment.path === null) return { gitAvailable: "unavailable", entries: [] };
+    } catch {
+      return { gitAvailable: "unavailable", entries: [] };
+    }
+    const { gitAvailable, changed, changedFolders } = await readGit(input.environmentId);
+    return {
+      gitAvailable,
+      entries: input.paths.map((path) => {
+        const gitState = changed.get(path) ?? (changedFolders.has(path) ? "modified" : undefined);
+        return { path, ...(gitState === undefined ? {} : { gitState }) };
+      }),
+    };
+  }
+
+  async function filePreview(input: FilePreviewInput): Promise<FilePreviewOutput> {
+    try {
+      assertWorkspaceRelative(input.path);
+    } catch {
+      return { outcome: "unavailable", reason: "invalid_path" };
+    }
+    let environment;
+    try {
+      environment = await bb.sdk.environments.get({ environmentId: input.environmentId });
+    } catch {
+      return { outcome: "unavailable", reason: "environment_unavailable" };
+    }
+    if (environment.path === null) return { outcome: "unavailable", reason: "no_workspace" };
+    const hostPath = /^[a-z]:[\\/]|^\\\\/i.test(environment.path) ? win32 : posix;
+    const rootPath = hostPath.normalize(environment.path);
+    if (!hostPath.isAbsolute(rootPath)) return { outcome: "unavailable", reason: "no_workspace" };
+    const path = hostPath.join(rootPath, ...input.path.split("/"));
+    try {
+      const read = await bb.sdk.files.read({ hostId: environment.hostId, rootPath, path });
+      if (hostPath.normalize(read.path) !== path) return { outcome: "unavailable", reason: "file_unavailable" };
+      if (read.sizeBytes > PREVIEW_MAX_BYTES || read.content.length > PREVIEW_MAX_BYTES) {
+        return { outcome: "unavailable", reason: "too_large" };
+      }
+      if (read.contentEncoding !== "utf8" || read.content.includes("\0") ||
+          (read.mimeType !== undefined && !/^(text\/|application\/(json|(?:[\w.-]+\+)?json|javascript|xml|(?:[\w.-]+\+)?xml|x-yaml)(?:;|$))/i.test(read.mimeType))) {
+        return { outcome: "unavailable", reason: "unsupported" };
+      }
+      if (Buffer.byteLength(read.content, "utf8") > PREVIEW_MAX_BYTES) return { outcome: "unavailable", reason: "too_large" };
+      return { outcome: "available", path: input.path, content: read.content };
+    } catch {
+      return { outcome: "unavailable", reason: "file_unavailable" };
+    }
+  }
+
   async function activitySnapshot(input: ActivitySnapshotInput): Promise<ActivitySnapshotOutput> {
     try {
       const timeline = await bb.sdk.threads.timeline({
@@ -67,7 +185,8 @@ export function createServerData(bb: BbPluginApi) {
         includeNestedRows: "true",
         summaryOnly: "false",
       });
-      return { available: true, activities: collectActiveActivities(timeline.rows) };
+      // Finished writes invalidate membership even if a fast tool's pending event was missed.
+      return { available: true, activities: [...collectActiveActivities(timeline.rows), ...completedFileChanges(timeline.rows)] };
     } catch {
       return { available: false, activities: [] };
     }
@@ -122,44 +241,7 @@ export function createServerData(bb: BbPluginApi) {
       return { outcome: "unavailable", directory: input.path, reason: "directory_unavailable" };
     }
 
-    // Git is optional annotation data. Its failure must not hide the directory.
-    let gitAvailable: "available" | "not_applicable" | "unavailable" = "unavailable";
-    const changed = new Map<string, GitState>();
-    const changedFolders = new Set<string>();
-    try {
-      const git = await bb.sdk.plugins.callRpc({
-        pluginId: "bb--git",
-        method: "files",
-        input: {
-          environmentId: input.environmentId,
-          target: { type: "uncommitted" },
-          ignoreWhitespace: false,
-        },
-        outputSchema: gitFilesOutputSchema,
-      });
-      gitAvailable = git.outcome;
-      if (git.outcome === "available") {
-        for (const file of git.files) {
-          try {
-            const segments = assertWorkspaceRelative(file.path);
-            changed.set(file.path, mapGitState(file.changeKind, file.origin));
-            for (let i = 1; i < segments.length; i++) {
-              changedFolders.add(segments.slice(0, i).join("/"));
-            }
-            if (file.previousPath !== null) {
-              const previous = assertWorkspaceRelative(file.previousPath);
-              for (let i = 1; i < previous.length; i++) {
-                changedFolders.add(previous.slice(0, i).join("/"));
-              }
-            }
-          } catch {
-            // Ignore malformed annotation paths rather than polluting membership.
-          }
-        }
-      }
-    } catch {
-      // Keep the requested filesystem listing available without Git markers.
-    }
+    const { gitAvailable, changed, changedFolders } = await readGit(input.environmentId);
 
     return {
       outcome: "available",
@@ -175,5 +257,5 @@ export function createServerData(bb: BbPluginApi) {
     };
   }
 
-  return { listTree, activitySnapshot };
+  return { listTree, activitySnapshot, filePreview, treeGit };
 }

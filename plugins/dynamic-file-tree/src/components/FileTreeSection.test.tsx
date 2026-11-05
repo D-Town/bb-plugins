@@ -33,15 +33,18 @@ function deferred<T>() {
   const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
   return { promise, resolve, reject };
 }
-function mount(handlers: Partial<PluginRpcTestHandlers<typeof rpcContract>> = {}, realtimeConnectionState: PluginRealtimeConnectionState = "connected") {
+function mount(handlers: Partial<PluginRpcTestHandlers<typeof rpcContract>> = {}, realtimeConnectionState: PluginRealtimeConnectionState = "connected", openFilePreview = () => true) {
   return renderSlot<typeof context, typeof rpcContract>({ component: DynamicFileTreeTab }, context, {
     experimental_rpcContract: rpcContract,
     realtimeConnectionState,
+    openFilePreview,
     // The unrelated global selection must never supply the explorer's scope.
     context: { threadId: "other_thread", projectId: "other_project" },
     rpc: {
       tree_list: async ({ path }) => available(path ?? ""),
       activity_snapshot: async () => ({ available: true, activities: [] }),
+      file_preview: async () => ({ outcome: "unavailable", reason: "file_unavailable" }),
+      tree_git: async ({ paths }) => ({ gitAvailable: "available", entries: paths.map((path) => ({ path })) }),
       ...handlers,
     },
   });
@@ -247,6 +250,194 @@ describe("fixed-tab file explorer", () => {
     fireEvent.click(view.getByRole("button", { name: "src" }));
     await waitFor(() => expect(requests(view).at(-1)).toEqual({ environmentId: nextContext.environment.id, path: "src" }));
     await view.findByRole("button", { name: "app.ts" });
+  });
+});
+
+describe("explorer row presentation and preview", () => {
+  it("uses host icons for closed/open folders, extensions, dotfiles and unknown types", async () => {
+    const view = mount({ tree_list: ({ path }) => available(path ?? "", path ? [] : [
+      directory("src"), ...["app.ts", "README.md", "photo.png", "unknown.xyz", ".gitignore"].map(file),
+    ]) });
+    const src = await view.findByRole("button", { name: "src" });
+    expect(src.querySelector('[data-icon="Folder"]')).toBeTruthy();
+    fireEvent.click(src);
+    expect(src.querySelector('[data-icon="FolderOpen"]')).toBeTruthy();
+    for (const [name, icon] of [["app.ts", "FileCode"], ["README.md", "FileText"], ["photo.png", "Image"], ["unknown.xyz", "File"], [".gitignore", "Settings"]]) {
+      const button = view.getByRole("button", { name });
+      expect(button.querySelector(`[data-icon="${icon}"][aria-hidden="true"]`)).toBeTruthy();
+      expect(button.textContent).toContain(name);
+    }
+  });
+
+  it("describes Git changes on treeitems and shows compact markers on files and folders", async () => {
+    const view = mount({ tree_list: () => available("", [
+      { ...directory("src"), gitState: "modified" },
+      { ...file("app.ts"), gitState: "modified" },
+      { ...file(".gitignore"), gitState: "untracked" }, file("clean.md"),
+    ]) });
+    await view.findByRole("treeitem", { name: "src" });
+    for (const [name, status, marker] of [["src", "modified", "M"], ["app.ts", "modified", "M"], [".gitignore", "untracked", "U"]]) {
+      expect(view.getByRole("treeitem", { name }).getAttribute("aria-description")).toContain(status);
+      const label = view.getByRole("button", { name }).querySelector('.file-tree-git-state');
+      expect(label?.textContent).toBe(marker);
+      expect(label?.getAttribute("title")).toContain(status);
+    }
+    expect(view.getByRole("button", { name: "clean.md" }).querySelector('.file-tree-git-state')).toBeNull();
+  });
+
+  it("uses native preview for binary and unknown files without reading fallback content", async () => {
+    const view = mount({ tree_list: () => available("", [file("photo.png"), file("archive.xyz")]) });
+    fireEvent.click(await view.findByRole("button", { name: "photo.png" }));
+    fireEvent.click(view.getByRole("button", { name: "archive.xyz" }));
+    expect(view.inspection.navigateCalls).toEqual(["photo.png", "archive.xyz"].map((path) => ({
+      method: "experimental_openFilePreview", options: { target: { kind: "workspace", environmentId: "env_1", path }, location: null },
+    })));
+    expect(view.inspection.rpcCalls.filter((call) => call.method === "file_preview")).toEqual([]);
+    expect(view.queryByRole("region", { name: "File preview" })).toBeNull();
+  });
+
+  it.each(["unsupported", "too_large"] as const)("keeps a declined native preview's %s error local", async (reason) => {
+    const view = mount({ file_preview: () => ({ outcome: "unavailable", reason }) }, "connected", () => false);
+    fireEvent.click(await view.findByRole("button", { name: ".gitignore" }));
+    const preview = await view.findByRole("region", { name: "File preview" });
+    expect(preview.textContent).toMatch(reason === "unsupported" ? /unsupported/i : /too large/i);
+    fireEvent.click(view.getByRole("button", { name: "src" }));
+    await view.findByRole("button", { name: "app.ts" });
+    expect(view.getByRole("treeitem", { name: ".gitignore" }).getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("shows escaped text only when native preview declines and ignores a late previous selection", async () => {
+    const old = deferred<{ outcome: "available"; path: string; content: string }>();
+    const view = mount({ file_preview: ({ path }) => path === ".gitignore" ? old.promise : { outcome: "available", path, content: "<script>hello</script>" } }, "connected", () => false);
+    fireEvent.click(await view.findByRole("button", { name: ".gitignore" }));
+    fireEvent.click(view.getByRole("button", { name: "docs" }));
+    fireEvent.click(await view.findByRole("button", { name: "guide.md" }));
+    const preview = await view.findByRole("region", { name: "File preview" });
+    await waitFor(() => expect(preview.textContent).toContain("<script>hello</script>"));
+    expect(preview.querySelector("script")).toBeNull();
+    await act(async () => old.resolve({ outcome: "available", path: ".gitignore", content: "stale" }));
+    expect(preview.textContent).not.toContain("stale");
+  });
+});
+
+describe("file change refresh", () => {
+  it("does not overwrite fresher directory annotations with a late Git refresh", async () => {
+    const annotations = deferred<{ gitAvailable: "available"; entries: { path: string }[] }>();
+    let changed = false;
+    const view = mount({
+      tree_list: ({ path }) => available(path ?? "", path === "src" && changed ? [{ ...file("src/app.ts"), gitState: "modified" }] : listings[path ?? ""]),
+      tree_git: () => annotations.promise,
+    });
+    fireEvent.click(await view.findByRole("button", { name: "src" }));
+    await view.findByRole("treeitem", { name: "app.ts" });
+    changed = true;
+    await update(view, [{ activityId: "write", path: "src/app.ts", kind: "write", status: "completed" }]);
+    await waitFor(() => expect(view.getByRole("treeitem", { name: "app.ts" }).getAttribute("aria-description")).toContain("modified"));
+    await act(async () => annotations.resolve({ gitAvailable: "available", entries: [{ path: "src/app.ts" }] }));
+    expect(view.getByRole("treeitem", { name: "app.ts" }).getAttribute("aria-description")).toContain("modified");
+  });
+
+  it("retains selection and preview when a directory refresh is truncated", async () => {
+    let refresh = false;
+    const view = mount({
+      tree_list: ({ path }) => refresh ? { ...available(path ?? "", []), truncated: true } : available(path ?? ""),
+      file_preview: ({ path }) => ({ outcome: "available", path, content: "keep preview" }),
+    }, "connected", () => false);
+    fireEvent.click(await view.findByRole("button", { name: ".gitignore" }));
+    await view.findByText("keep preview");
+    refresh = true;
+    await update(view, [{ activityId: "write", path: ".gitignore", kind: "write", status: "completed" }]);
+    await view.findByText("Showing the first 10,000 paths.");
+    expect(view.getByRole("region", { name: "File preview" }).textContent).toContain("keep preview");
+  });
+
+  it("removes a missing preview once a complete listing follows a truncated refresh", async () => {
+    let refresh = 0;
+    const view = mount({
+      tree_list: ({ path }) => refresh === 0 ? available(path ?? "") : { ...available(path ?? "", []), truncated: refresh === 1 },
+      file_preview: ({ path }) => ({ outcome: "available", path, content: "keep preview" }),
+    }, "connected", () => false);
+    fireEvent.click(await view.findByRole("button", { name: ".gitignore" }));
+    await view.findByText("keep preview");
+    refresh = 1;
+    await update(view, [{ activityId: "write_1", path: ".gitignore", kind: "write", status: "completed" }]);
+    await view.findByText("Showing the first 10,000 paths.");
+    refresh = 2;
+    await update(view, [{ activityId: "write_2", path: ".gitignore", kind: "write", status: "completed" }], 2);
+    await waitFor(() => expect(view.queryByText("Showing the first 10,000 paths.")).toBeNull());
+    expect(view.queryByRole("region", { name: "File preview" })).toBeNull();
+  });
+
+  it("preserves loaded rows and previews after refresh failure and allows a keyboard retry", async () => {
+    let failed = false;
+    const view = mount({
+      tree_list: ({ path }) => {
+        if (failed && path === "src") throw new Error("Offline");
+        return available(path ?? "");
+      },
+      file_preview: ({ path }) => ({ outcome: "available", path, content: "keep preview" }),
+    }, "connected", () => false);
+    fireEvent.click(await view.findByRole("button", { name: "src" }));
+    fireEvent.click(await view.findByRole("button", { name: "app.ts" }));
+    await view.findByText("keep preview");
+    failed = true;
+    await update(view, [{ activityId: "write_1", path: "src/app.ts", kind: "write", status: "completed" }]);
+    await view.findByRole("alert");
+    expect(view.getByRole("treeitem", { name: "app.ts" }).getAttribute("aria-selected")).toBe("true");
+    expect(view.getByRole("region", { name: "File preview" }).textContent).toContain("keep preview");
+    focusRow(view.getByRole("treeitem", { name: "src" }));
+    failed = false;
+    press("ArrowRight");
+    await waitFor(() => expect(view.queryByRole("alert")).toBeNull());
+    expect(requests(view).map(({ path }) => path)).toEqual(["", "src", "src", "src"]);
+  });
+
+  it("refreshes only a completed write's directory and cached Git annotations, preserving selection, focus and manual expansion", async () => {
+    let changed = false;
+    const view = mount({
+      tree_list: ({ path }) => available(path ?? "", path === "src" && changed ? [directory("src/components"), directory("src/utils"), { ...file("src/app.ts"), gitState: "modified" }, file("src/new.ts")] : listings[path ?? ""]),
+      tree_git: ({ paths }) => ({ gitAvailable: "available", entries: paths.map((path) => ({ path, ...(path === "src" ? { gitState: "modified" as const } : {}) })) }),
+    });
+    fireEvent.click(await view.findByRole("button", { name: "src" }));
+    fireEvent.click(await view.findByRole("button", { name: "components" }));
+    await view.findByRole("button", { name: "Button.tsx" });
+    fireEvent.click(view.getByRole("button", { name: "docs" }));
+    await view.findByRole("button", { name: "guide.md" });
+    fireEvent.click(view.getByRole("button", { name: "app.ts" }));
+    const app = view.getByRole("treeitem", { name: "app.ts" });
+    const write: ActivePathActivity = { activityId: "write_1", path: "src/app.ts", kind: "write", status: "pending" };
+    await update(view, [write]);
+    changed = true;
+    await update(view, [], 2);
+    await view.findByRole("button", { name: "new.ts" });
+    expect(app.getAttribute("aria-selected")).toBe("true");
+    expect(document.activeElement).toBe(app);
+    expect(view.getByRole("button", { name: "Button.tsx" })).toBeTruthy();
+    expect(view.getByRole("button", { name: "guide.md" })).toBeTruthy();
+    expect(view.getByRole("treeitem", { name: "src" }).getAttribute("aria-description")).toContain("modified");
+    expect(requests(view).map(({ path }) => path)).toEqual(["", "src", "src/components", "docs", "src"]);
+    expect(view.inspection.rpcCalls.filter((call) => call.method === "tree_git")).toHaveLength(1);
+    await update(view, [], 3);
+    expect(requests(view)).toHaveLength(5);
+  });
+
+  it("removes only a missing selection's inline preview after a complete directory refresh", async () => {
+    let removed = false;
+    const view = mount({
+      tree_list: ({ path }) => available(path ?? "", path === "docs" && removed ? [] : listings[path ?? ""]),
+      tree_git: ({ paths }) => ({ gitAvailable: "available", entries: paths.map((path) => ({ path })) }),
+      file_preview: ({ path }) => ({ outcome: "available", path, content: "preview text" }),
+    }, "connected", () => false);
+    fireEvent.click(await view.findByRole("button", { name: "docs" }));
+    fireEvent.click(await view.findByRole("button", { name: "guide.md" }));
+    await view.findByText("preview text");
+    removed = true;
+    await update(view, [{ activityId: "delete", path: "docs/guide.md", kind: "write", status: "completed" }]);
+    await waitFor(() => expect(view.queryByRole("button", { name: "guide.md" })).toBeNull());
+    expect(view.queryByRole("region", { name: "File preview" })).toBeNull();
+    expect(view.queryByRole("treeitem", { selected: true })).toBeNull();
+    expect(view.getByRole("button", { name: "docs" }).getAttribute("aria-expanded")).toBe("true");
+    expect(view.getByRole("button", { name: ".gitignore" })).toBeTruthy();
   });
 });
 

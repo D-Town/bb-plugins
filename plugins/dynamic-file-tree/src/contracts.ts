@@ -71,6 +71,33 @@ export const listTreeOutputSchema = z.discriminatedUnion("outcome", [
   }),
 ]);
 
+export const PREVIEW_MAX_BYTES = 65_536;
+const boundedPath = z.string().min(1).max(4096);
+export const filePreviewInputSchema = z.strictObject({
+  environmentId: z.string().trim().min(1).max(256),
+  path: boundedPath,
+});
+export const filePreviewOutputSchema = z.discriminatedUnion("outcome", [
+  z.strictObject({
+    outcome: z.literal("available"),
+    path: boundedPath,
+    content: z.string().max(PREVIEW_MAX_BYTES).refine((value) => new TextEncoder().encode(value).length <= PREVIEW_MAX_BYTES),
+  }),
+  z.strictObject({
+    outcome: z.literal("unavailable"),
+    reason: z.enum(["unsupported", "too_large", "invalid_path", "no_workspace", "environment_unavailable", "file_unavailable"]),
+  }),
+]);
+
+export const treeGitInputSchema = z.strictObject({
+  environmentId: z.string().trim().min(1).max(256),
+  paths: z.array(boundedPath).max(10_000),
+});
+export const treeGitOutputSchema = z.strictObject({
+  gitAvailable: z.enum(["available", "not_applicable", "unavailable"]),
+  entries: z.array(z.strictObject({ path: boundedPath, gitState: gitStateSchema.optional() })).max(10_000),
+});
+
 export const rpcContract = defineRpcContract({
   activity_snapshot: {
     input: activitySnapshotInputSchema,
@@ -80,7 +107,14 @@ export const rpcContract = defineRpcContract({
     input: listTreeInputSchema,
     output: listTreeOutputSchema,
   },
+  file_preview: { input: filePreviewInputSchema, output: filePreviewOutputSchema },
+  tree_git: { input: treeGitInputSchema, output: treeGitOutputSchema },
 });
+
+export type FilePreviewInput = z.infer<typeof filePreviewInputSchema>;
+export type FilePreviewOutput = z.infer<typeof filePreviewOutputSchema>;
+export type TreeGitInput = z.infer<typeof treeGitInputSchema>;
+export type TreeGitOutput = z.infer<typeof treeGitOutputSchema>;
 
 export type ListTreeInput = z.infer<typeof listTreeInputSchema>;
 export type ListTreeOutput = z.infer<typeof listTreeOutputSchema>;

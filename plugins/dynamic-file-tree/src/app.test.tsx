@@ -118,6 +118,7 @@ describe("Dynamic File Tree app", () => {
         environment: { id: "env_1" },
       },
       {
+        openFilePreview: () => true,
         experimental_rpcContract: rpcContract,
         rpc: {
           tree_list: async () => ({
@@ -147,6 +148,7 @@ describe("Dynamic File Tree app", () => {
         location: null,
       },
     });
+    expect(rendered.inspection.rpcCalls.some((call) => call.method === "file_preview")).toBe(false);
   });
 });
 
