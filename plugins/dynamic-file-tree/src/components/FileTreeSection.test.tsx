@@ -51,7 +51,7 @@ function mount(handlers: Partial<PluginRpcTestHandlers<typeof rpcContract>> = {}
       workspace: async () => ({ rootPath: "/workspace/project", hostId: "host_1", branchName: "main", isGitRepo: true }),
       tree: async () => ({ entries: [], truncated: false }),
       activity: async () => ({ files: [], status: [] }),
-      prefs_get: async () => ({ showDiff: true, showSize: false, showMtime: false, showFullPath: false, useNerdFontIcons: false, autoCollapse: true }),
+      prefs_get: async () => ({ showDiff: true, showSize: false, showMtime: false, showFullPath: false, useNerdFontIcons: false, autoCollapse: true, readColor: "#8b5cf6", writeColor: "#f59e0b", addedColor: "#22c55e", deletedColor: "#ef4444", modifiedColor: "#ad7900", diffAddColor: "#38854b", diffDeleteColor: "#cf4545" }),
       prefs_set: async (input) => input,
       stats: async ({ paths }) => ({ entries: paths.map((path) => ({ path, size: null, mtimeMs: null })) }),
       log: async () => null,

@@ -94,7 +94,11 @@ function completedFileChanges(rows: readonly unknown[]): ActivePathActivity[] {
 }
 
 export function createServerData(bb: BbPluginApi) {
-  const defaultPrefs: Prefs = { showDiff: true, showSize: false, showMtime: false, showFullPath: false, useNerdFontIcons: false, autoCollapse: true };
+  const defaultPrefs: Prefs = {
+    showDiff: true, showSize: false, showMtime: false, showFullPath: false, useNerdFontIcons: false, autoCollapse: true,
+    readColor: "#8b5cf6", writeColor: "#f59e0b", addedColor: "#22c55e", deletedColor: "#ef4444", modifiedColor: "#ad7900",
+    diffAddColor: "#38854b", diffDeleteColor: "#cf4545",
+  };
 
   async function workspace(input: { threadId: string; environmentId: string }): Promise<WorkspaceOutput> {
     const environment = await bb.sdk.environments.get({ environmentId: input.environmentId });

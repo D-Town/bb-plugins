@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { KeyboardEvent, ReactNode } from "react";
+import type { CSSProperties, KeyboardEvent, ReactNode } from "react";
 import { experimental_Icon as Icon, useBbNavigate, useRealtime, useRealtimeConnectionState, useRpc } from "@get-bb/plugin-sdk/app";
 import type { ExperimentalThreadTabProps } from "@get-bb/plugin-sdk/app";
 import { activeAncestorPaths, ancestorPaths } from "../activity-model";
@@ -37,8 +37,19 @@ type ExplorerPrefs = {
   showFullPath: boolean;
   useNerdFontIcons: boolean;
   autoCollapse: boolean;
+  readColor: string;
+  writeColor: string;
+  addedColor: string;
+  deletedColor: string;
+  modifiedColor: string;
+  diffAddColor: string;
+  diffDeleteColor: string;
 };
-const defaultPrefs: ExplorerPrefs = { showDiff: true, showSize: false, showMtime: false, showFullPath: false, useNerdFontIcons: false, autoCollapse: true };
+const defaultPrefs: ExplorerPrefs = {
+  showDiff: true, showSize: false, showMtime: false, showFullPath: false, useNerdFontIcons: false, autoCollapse: true,
+  readColor: "#8b5cf6", writeColor: "#f59e0b", addedColor: "#22c55e", deletedColor: "#ef4444", modifiedColor: "#ad7900",
+  diffAddColor: "#38854b", diffDeleteColor: "#cf4545",
+};
 const fileIcons: Record<string, string> = {
   ts: "FileCode", tsx: "FileCode", js: "FileCode", jsx: "FileCode", py: "FileCode", rs: "FileCode", go: "FileCode",
   md: "FileText", mdx: "FileText", txt: "FileText", rst: "FileText",
@@ -91,6 +102,10 @@ const explorerStyles = `
 .dynamic-file-tree .file-tree-header-button:hover { background: var(--muted, color-mix(in srgb, currentColor 10%, transparent)); }
 .dynamic-file-tree .file-tree-settings { margin: 6px 8px; padding: 7px 8px; border: 1px solid var(--border, color-mix(in srgb, currentColor 20%, transparent)); border-radius: 6px; background: var(--card, color-mix(in srgb, currentColor 4%, transparent)); }
 .dynamic-file-tree .file-tree-setting { display: flex; align-items: center; gap: 7px; min-height: 25px; white-space: nowrap; }
+.dynamic-file-tree .file-tree-settings-divider { height: 1px; margin: 6px 0; background: var(--border, color-mix(in srgb, currentColor 16%, transparent)); }
+.dynamic-file-tree .file-tree-settings-label { margin: 4px 0; opacity: .65; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
+.dynamic-file-tree .file-tree-color-setting { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 25px; white-space: nowrap; }
+.dynamic-file-tree .file-tree-color-setting input[type=color] { width: 30px; height: 20px; padding: 0; border: 1px solid var(--border, color-mix(in srgb, currentColor 24%, transparent)); border-radius: 4px; background: transparent; cursor: pointer; }
 .dynamic-file-tree .file-tree-glyph { width: 14px; flex: 0 0 14px; text-align: center; font-family: "JetBrainsMono Nerd Font", "FiraCode Nerd Font", "Hack Nerd Font", "Symbols Nerd Font", ui-monospace, monospace; font-size: 15px; line-height: 14px; }
 .dynamic-file-tree .file-tree-entry { display: flex; align-items: center; gap: 6px; width: 100%; min-width: 0; height: 26px; padding: 0 8px 0 4px; border: 0; border-radius: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .dynamic-file-tree .file-tree-entry:hover { background: var(--muted, color-mix(in srgb, currentColor 7%, transparent)); }
@@ -103,22 +118,22 @@ const explorerStyles = `
 .dynamic-file-tree .file-tree-git-state { margin-left: auto; padding-left: 8px; font-size: 11px; font-weight: 600; }
 .dynamic-file-tree .file-tree-diff-stats { display: inline-flex; gap: 5px; padding-left: 8px; font-size: 10px; font-weight: 600; }
 .dynamic-file-tree .file-tree-file-stat { padding-left: 7px; opacity: .55; font-size: 10px; white-space: nowrap; }
-.dynamic-file-tree .file-tree-additions { color: var(--success, #38854b); }
-.dynamic-file-tree .file-tree-deletions { color: var(--destructive, #cf4545); }
-.dynamic-file-tree [data-git=modified], .dynamic-file-tree [data-git=renamed] { color: var(--warning, #ad7900); }
-.dynamic-file-tree [data-git=added], .dynamic-file-tree [data-git=untracked] { color: var(--success, #38854b); }
-.dynamic-file-tree [data-git=deleted] { color: var(--destructive, #cf4545); }
+.dynamic-file-tree .file-tree-additions { color: var(--filetree-diff-add, #38854b); }
+.dynamic-file-tree .file-tree-deletions { color: var(--filetree-diff-delete, #cf4545); }
+.dynamic-file-tree [data-git=modified], .dynamic-file-tree [data-git=renamed] { color: var(--filetree-modified, #ad7900); }
+.dynamic-file-tree [data-git=added], .dynamic-file-tree [data-git=untracked] { color: var(--filetree-added, #38854b); }
+.dynamic-file-tree [data-git=deleted] { color: var(--filetree-deleted, #ef4444); }
 .dynamic-file-tree .file-tree-preview { border-top: 1px solid var(--border, color-mix(in srgb, currentColor 16%, transparent)); margin-top: 8px; padding: 8px; }
 .dynamic-file-tree .file-tree-preview pre { max-height: 320px; overflow: auto; font: inherit; white-space: pre; }
 .dynamic-file-tree .file-tree-name, .dynamic-file-tree .file-tree-icon, .dynamic-file-tree .file-tree-glyph { transition: color 1.2s ease; }
-.dynamic-file-tree .file-tree-activity-read { color: #8b5cf6; }
-.dynamic-file-tree .file-tree-activity-write { color: #f59e0b; }
+.dynamic-file-tree .file-tree-activity-read { color: var(--filetree-read, #8b5cf6); }
+.dynamic-file-tree .file-tree-activity-write { color: var(--filetree-write, #f59e0b); }
 .dynamic-file-tree .file-tree-activity-read-shimmer { animation: file-tree-pulse-read 1.6s ease-in-out infinite alternate; }
 .dynamic-file-tree .file-tree-activity-write-shimmer { animation: file-tree-pulse-write 1.6s ease-in-out infinite alternate; }
-.dynamic-file-tree .file-tree-status-added { padding: 0 4px; margin: 0 -4px; border-radius: 4px; background: rgba(34,197,94,.13); box-shadow: inset 0 0 0 1px rgba(34,197,94,.4); }
-.dynamic-file-tree .file-tree-status-deleted { padding: 0 4px; margin: 0 -4px; border-radius: 4px; background: rgba(239,68,68,.11); color: rgba(239,68,68,.85); text-decoration: line-through; box-shadow: inset 0 0 0 1px rgba(239,68,68,.35); }
-@keyframes file-tree-pulse-read { from { color: #8b5cf6; } to { color: #c4b5fd; } }
-@keyframes file-tree-pulse-write { from { color: #f59e0b; } to { color: #fcd34d; } }
+.dynamic-file-tree .file-tree-status-added { padding: 0 4px; margin: 0 -4px; border-radius: 4px; background: color-mix(in srgb, var(--filetree-added, #22c55e) 13%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--filetree-added, #22c55e) 40%, transparent); }
+.dynamic-file-tree .file-tree-status-deleted { padding: 0 4px; margin: 0 -4px; border-radius: 4px; background: color-mix(in srgb, var(--filetree-deleted, #ef4444) 11%, transparent); color: var(--filetree-deleted, #ef4444); text-decoration: line-through; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--filetree-deleted, #ef4444) 35%, transparent); }
+@keyframes file-tree-pulse-read { from { opacity: .72; } to { opacity: 1; } }
+@keyframes file-tree-pulse-write { from { opacity: .72; } to { opacity: 1; } }
 `;
 
 function StatusMessage({ children, label }: { children: ReactNode; label?: string }) {
@@ -562,6 +577,11 @@ function ContextExplorer({ threadId, environmentId }: { threadId: string; enviro
     rpc.call("prefs_set", next).catch(() => undefined);
   };
 
+  const refreshTree = () => {
+    loadDirectory("", true);
+    rpc.call("workspace", { threadId, environmentId }).then(setWorkspaceInfo, () => undefined);
+  };
+
   function renderDirectory(path: string, depth: number): ReactNode {
     const cached = state.directories.get(path);
     if (cached === undefined || cached.status === "loading") {
@@ -667,11 +687,23 @@ function ContextExplorer({ threadId, environmentId }: { threadId: string; enviro
     </>;
   }
 
-  return <div className="dynamic-file-tree">
+  const themeStyle = {
+    "--filetree-read": prefs.readColor,
+    "--filetree-write": prefs.writeColor,
+    "--filetree-added": prefs.addedColor,
+    "--filetree-deleted": prefs.deletedColor,
+    "--filetree-modified": prefs.modifiedColor,
+    "--filetree-diff-add": prefs.diffAddColor,
+    "--filetree-diff-delete": prefs.diffDeleteColor,
+  } as CSSProperties;
+  return <div className="dynamic-file-tree" style={themeStyle}>
     <style>{explorerStyles}</style>
     <header className="file-tree-header">
-      <div className="file-tree-header-title"><Icon name="FolderTree" aria-hidden="true" className="file-tree-icon" /> <span>Filetree</span> <span className="file-tree-header-count">{visibleRows.length} items</span>{workspaceInfo?.branchName ? <span className="file-tree-branch">⎇ {workspaceInfo.branchName}</span> : null}</div>
+      <div className="file-tree-header-title"><Icon name="FolderTree" aria-hidden="true" className="file-tree-icon" /> <span>Filetree</span> <span className="file-tree-header-count">{visibleRows.length} items</span>{workspaceInfo?.branchName ? <span className="file-tree-branch"><Icon name="GitBranch" aria-hidden="true" className="file-tree-icon" /> {workspaceInfo.branchName}</span> : null}</div>
       <span className="file-tree-header-spacer" />
+      <button type="button" tabIndex={-1} className="file-tree-header-button" aria-label="Refresh filetree" title="Refresh filetree" onClick={refreshTree}>
+        <Icon name="RefreshCw" aria-hidden="true" />
+      </button>
       <button type="button" tabIndex={-1} className="file-tree-header-button" aria-label="Filetree settings" aria-expanded={settingsOpen} onClick={() => setSettingsOpen((open) => !open)}>
         <Icon name="Settings2" aria-hidden="true" />
       </button>
@@ -683,6 +715,15 @@ function ContextExplorer({ threadId, environmentId }: { threadId: string; enviro
       <label className="file-tree-setting"><input type="checkbox" checked={prefs.showFullPath} onChange={(event) => updatePrefs({ showFullPath: event.target.checked })} /> Voller Pfad</label>
       <label className="file-tree-setting"><input type="checkbox" checked={prefs.useNerdFontIcons} onChange={(event) => updatePrefs({ useNerdFontIcons: event.target.checked })} /> Nerd-Font-Icons</label>
       <label className="file-tree-setting"><input type="checkbox" checked={prefs.autoCollapse} onChange={(event) => updatePrefs({ autoCollapse: event.target.checked })} /> Auto-Zuklappen</label>
+      <div className="file-tree-settings-divider" />
+      <div className="file-tree-settings-label">Farben</div>
+      <label className="file-tree-color-setting">Lesen <input aria-label="Farbe für Lesen" type="color" value={prefs.readColor} onChange={(event) => updatePrefs({ readColor: event.target.value })} /></label>
+      <label className="file-tree-color-setting">Schreiben <input aria-label="Farbe für Schreiben" type="color" value={prefs.writeColor} onChange={(event) => updatePrefs({ writeColor: event.target.value })} /></label>
+      <label className="file-tree-color-setting">Hinzugefügt <input aria-label="Farbe für hinzugefügte Dateien" type="color" value={prefs.addedColor} onChange={(event) => updatePrefs({ addedColor: event.target.value })} /></label>
+      <label className="file-tree-color-setting">Gelöscht <input aria-label="Farbe für gelöschte Dateien" type="color" value={prefs.deletedColor} onChange={(event) => updatePrefs({ deletedColor: event.target.value })} /></label>
+      <label className="file-tree-color-setting">Geändert <input aria-label="Farbe für geänderte Dateien" type="color" value={prefs.modifiedColor} onChange={(event) => updatePrefs({ modifiedColor: event.target.value })} /></label>
+      <label className="file-tree-color-setting">Diff + <input aria-label="Farbe für Diff-Zunahmen" type="color" value={prefs.diffAddColor} onChange={(event) => updatePrefs({ diffAddColor: event.target.value })} /></label>
+      <label className="file-tree-color-setting">Diff − <input aria-label="Farbe für Diff-Abnahmen" type="color" value={prefs.diffDeleteColor} onChange={(event) => updatePrefs({ diffDeleteColor: event.target.value })} /></label>
     </div> : null}
     <div role="tree" aria-label="Project files"
     onFocusCapture={() => { treeHasFocus.current = true; }}

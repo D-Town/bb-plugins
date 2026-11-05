@@ -18,7 +18,9 @@ export default async function plugin(bb: BbPluginApi) {
     tree: (input) => data.tree(input),
     activity: (input) => {
       const snapshot = liveActivity.snapshot(input.threadId);
-      return snapshot.files.length || snapshot.status.length ? snapshot : data.activity(input);
+      if (snapshot.files.length || snapshot.status.length) return { files: snapshot.files, status: snapshot.status };
+      return liveActivity.syncById(input.threadId).then((live) =>
+        live.files.length || live.status.length ? { files: live.files, status: live.status } : data.activity(input));
     },
     prefs_get: () => data.prefsGet(),
     prefs_set: (input) => data.prefsSet(input),

@@ -31,4 +31,20 @@ describe("live file activity", () => {
     ]));
     await host.harness.lifecycle.dispose();
   });
+
+  it("recovers Codex shell reads and apply_patch writes", async () => {
+    const host = createFakePluginHost({ sdk: {
+      environments: { get: async () => ({ path: "/workspace/project" }) },
+      threads: { events: { list: async () => [
+        { seq: 3, data: { item: { type: "commandExecution", cwd: "/workspace/project", command: "/bin/zsh -lc \"sed -n '1,80p' README.md\"" } } },
+        { seq: 4, data: { item: { type: "commandExecution", cwd: "/workspace/project", command: "apply_patch <<'PATCH'\n*** Update File: /workspace/project/plugins/dynamic-file-tree/src/components/FileTreeSection.tsx\nPATCH" } } },
+      ] } },
+    } });
+    const result = await createLiveActivityCollector(host.bb).sync({ id: "thread_1", parentThreadId: null, environmentId: "env_1" });
+    expect(result.files).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "README.md", kind: "read" }),
+      expect.objectContaining({ path: "plugins/dynamic-file-tree/src/components/FileTreeSection.tsx", kind: "write" }),
+    ]));
+    await host.harness.lifecycle.dispose();
+  });
 });

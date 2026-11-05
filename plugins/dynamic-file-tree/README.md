@@ -10,9 +10,16 @@ receive temporary status markers. The panel follows the active thread instead
 of using a global working directory.
 
 The gear menu controls diff counts, size/mtime columns, full paths, Nerd-Font
-icons, and activity-driven auto-collapse. Preferences are stored through the
-plugin's namespaced BB key-value storage; tree expansion itself is session
-state and is intentionally not persisted.
+icons, activity-driven auto-collapse, and the colors for reads, writes, Git
+states, and diff counts. Preferences are stored through the plugin's
+namespaced BB key-value storage; tree expansion itself is session state and is
+intentionally not persisted. The fixed tab uses BB's `FolderTree` icon; the
+panel header uses `FolderTree`, `GitBranch`, `RefreshCw`, and `Settings2`.
+
+Activity is collected from provider file events and, for shell-backed providers
+such as Codex, common command executions (`sed`, `rg`, `cat`, and
+`apply_patch`) as a fallback. This keeps the tree useful even when the provider
+does not emit a native `fileRead` event.
 
 ## Development
 
