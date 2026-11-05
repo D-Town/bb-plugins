@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import type { ReactNode } from "react";
-import { useBbNavigate, useRealtime, useRpc } from "@get-bb/plugin-sdk/app";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import type { KeyboardEvent, ReactNode } from "react";
+import { useBbNavigate, useRealtime, useRealtimeConnectionState, useRpc } from "@get-bb/plugin-sdk/app";
 import type { ExperimentalThreadTabProps } from "@get-bb/plugin-sdk/app";
 import { activeAncestorPaths } from "../activity-model";
 import { activityUpdatedSchema, rpcContract } from "../contracts";
@@ -49,6 +49,7 @@ export function FileTreeView(props: ExperimentalThreadTabProps) {
 function ContextExplorer({ threadId, environmentId }: { threadId: string; environmentId: string }) {
   const rpc = useRpc<typeof rpcContract>();
   const navigate = useBbNavigate();
+  const connectionState = useRealtimeConnectionState();
   const [state, setState] = useState<ExplorerState>(() => ({
     manualExpanded: new Set(),
     autoExpanded: new Set(),
@@ -59,6 +60,9 @@ function ContextExplorer({ threadId, environmentId }: { threadId: string; enviro
   const stateRef = useRef(state);
   const mounted = useRef(false);
   const latestSequence = useRef<number | null>(null);
+  const [focusedPath, setFocusedPath] = useState<string | null>(null);
+  const rows = useRef(new Map<string, HTMLDivElement>());
+  const treeHasFocus = useRef(false);
   const updateState = useCallback((change: (current: ExplorerState) => ExplorerState) => {
     const next = change(stateRef.current);
     stateRef.current = next;
@@ -95,7 +99,7 @@ function ContextExplorer({ threadId, environmentId }: { threadId: string; enviro
 
   useRealtime("activity-updated", (payload) => {
     const parsed = activityUpdatedSchema.safeParse(payload);
-    if (!mounted.current || !parsed.success || parsed.data.threadId !== threadId) return;
+    if (!mounted.current || connectionState !== "connected" || !parsed.success || parsed.data.threadId !== threadId) return;
     if (latestSequence.current !== null && parsed.data.sequence <= latestSequence.current) return;
     latestSequence.current = parsed.data.sequence;
     applyActivity(parsed.data);
@@ -103,22 +107,33 @@ function ContextExplorer({ threadId, environmentId }: { threadId: string; enviro
 
   useEffect(() => {
     mounted.current = true;
-    // A late mount snapshot must not replace newer realtime activity.
-    let active = true;
     loadDirectory("");
+    return () => {
+      mounted.current = false;
+    };
+  }, [loadDirectory]);
+
+  useEffect(() => {
+    if (connectionState !== "connected") {
+      applyActivity({ available: false, activities: [] });
+      return;
+    }
+    let active = true;
+    // Preserve the sequence high-water mark across outages. Reconciliation is
+    // valid only if no newer realtime event arrived after this request began.
+    const sequenceAtRequest = latestSequence.current;
     rpc.call("activity_snapshot", { threadId }).then(
       (snapshot) => {
-        if (active && latestSequence.current === null) applyActivity(snapshot);
+        if (active && latestSequence.current === sequenceAtRequest) applyActivity(snapshot);
       },
       () => {
-        if (active && latestSequence.current === null) applyActivity({ available: false, activities: [] });
+        if (active && latestSequence.current === sequenceAtRequest) applyActivity({ available: false, activities: [] });
       },
     );
     return () => {
       active = false;
-      mounted.current = false;
     };
-  }, [threadId, rpc, loadDirectory, applyActivity]);
+  }, [connectionState, threadId, rpc, applyActivity]);
 
   useEffect(() => {
     // Walk only known directories, so activity cannot fetch a leaf or skip an
@@ -152,6 +167,96 @@ function ContextExplorer({ threadId, environmentId }: { threadId: string; enviro
     });
   };
 
+  const isExpanded = (path: string) => state.manualExpanded.has(path) || state.autoExpanded.has(path);
+  const visibleRows: { entry: TreeEntry; parent: string }[] = [];
+  function collectRows(path: string) {
+    const cached = state.directories.get(path);
+    if (cached?.status !== "loaded" || cached.result.outcome !== "available") return;
+    for (const entry of cached.result.entries) {
+      visibleRows.push({ entry, parent: path });
+      if (entry.kind === "directory" && isExpanded(entry.path)) collectRows(entry.path);
+    }
+  }
+  collectRows("");
+  const visiblePaths = new Set(visibleRows.map(({ entry }) => entry.path));
+  let tabStop = focusedPath ?? "";
+  // If activity collapses the focused branch, retain the nearest visible ancestor.
+  while (tabStop && !visiblePaths.has(tabStop)) {
+    tabStop = tabStop.slice(0, Math.max(0, tabStop.lastIndexOf("/")));
+  }
+  tabStop ||= visibleRows[0]?.entry.path ?? "";
+
+  useLayoutEffect(() => {
+    if (focusedPath !== null && focusedPath !== tabStop) {
+      setFocusedPath(tabStop || null);
+      if (treeHasFocus.current) rows.current.get(tabStop)?.focus();
+    }
+  }, [focusedPath, tabStop]);
+
+  const focusRow = (path: string | undefined) => {
+    if (!path) return;
+    setFocusedPath(path);
+    rows.current.get(path)?.focus();
+  };
+
+  const onRowKeyDown = (event: KeyboardEvent<HTMLDivElement>, entry: TreeEntry) => {
+    // Treeitems contain their descendants; handle a key only at its focused row.
+    if (event.target !== event.currentTarget) return;
+    const index = visibleRows.findIndex((row) => row.entry.path === entry.path);
+    switch (event.key) {
+      case "ArrowDown":
+        focusRow(visibleRows[index + 1]?.entry.path);
+        break;
+      case "ArrowUp":
+        focusRow(visibleRows[index - 1]?.entry.path);
+        break;
+      case "Home":
+        focusRow(visibleRows[0]?.entry.path);
+        break;
+      case "End":
+        focusRow(visibleRows.at(-1)?.entry.path);
+        break;
+      case "ArrowRight": {
+        if (entry.kind !== "directory") break;
+        if (!isExpanded(entry.path)) {
+          toggle(entry.path);
+        } else {
+          const cached = state.directories.get(entry.path);
+          if (cached?.status === "error" || (cached?.status === "loaded" && cached.result.outcome === "unavailable")) {
+            loadDirectory(entry.path, true);
+          } else if (visibleRows[index + 1]?.parent === entry.path) {
+            focusRow(visibleRows[index + 1].entry.path);
+          }
+        }
+        break;
+      }
+      case "ArrowLeft":
+        if (entry.kind === "directory" && isExpanded(entry.path)) {
+          updateState((current) => {
+            const manualExpanded = new Set(current.manualExpanded);
+            const autoExpanded = new Set(current.autoExpanded);
+            manualExpanded.delete(entry.path);
+            // Explicit keyboard collapse applies even to an activity-opened row.
+            // A subsequent activity update can restore its automatic expansion.
+            autoExpanded.delete(entry.path);
+            return { ...current, manualExpanded, autoExpanded };
+          });
+        } else {
+          focusRow(visibleRows[index]?.parent);
+        }
+        break;
+      case "Enter":
+      case " ":
+        if (entry.kind === "directory") toggle(entry.path);
+        else select(entry.path);
+        break;
+      default:
+        return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
   function renderDirectory(path: string, depth: number): ReactNode {
     const cached = state.directories.get(path);
     if (cached === undefined || cached.status === "loading") {
@@ -172,28 +277,48 @@ function ContextExplorer({ threadId, environmentId }: { threadId: string; enviro
     if (cached.status === "error" || cached.result.outcome === "unavailable") {
       return <div role="alert">
         Could not load {path || "files"}: {cached.status === "error" ? cached.message : "Directory unavailable."}
-        <button type="button" aria-label={`Retry ${path || "files"}`} onClick={() => loadDirectory(path, true)}>Retry</button>
+        <button type="button" tabIndex={path ? -1 : 0} aria-label={`Retry ${path || "files"}`} onClick={() => {
+          focusRow(path);
+          loadDirectory(path, true);
+        }}>Retry</button>
       </div>;
     }
     const { entries, truncated } = cached.result;
     return <>
       {entries.length === 0 ? <StatusMessage>No files found.</StatusMessage> : entries.map((entry) => {
         const isDirectory = entry.kind === "directory";
-        const expanded = state.manualExpanded.has(entry.path) || state.autoExpanded.has(entry.path);
+        const expanded = isExpanded(entry.path);
         const selected = state.selectedPath === entry.path;
+        const children = state.directories.get(entry.path);
+        const failed = children?.status === "error" || (children?.status === "loaded" && children.result.outcome === "unavailable");
         return <div
           key={entry.path}
+          ref={(element) => {
+            if (element) rows.current.set(entry.path, element);
+            else rows.current.delete(entry.path);
+          }}
           role="treeitem"
+          tabIndex={entry.path === tabStop ? 0 : -1}
           aria-label={entry.name}
           aria-level={depth + 1}
           aria-expanded={isDirectory ? expanded : undefined}
           aria-selected={selected}
+          aria-description={isDirectory && expanded && failed ? "Could not load children. Press ArrowRight to retry." : undefined}
+          onFocus={(event) => {
+            if (event.target === event.currentTarget) setFocusedPath(entry.path);
+          }}
+          onKeyDown={(event) => onRowKeyDown(event, entry)}
         >
           <button
             type="button"
+            tabIndex={-1}
             aria-label={entry.name}
             aria-expanded={isDirectory ? expanded : undefined}
-            onClick={() => isDirectory ? toggle(entry.path) : select(entry.path)}
+            onClick={() => {
+              focusRow(entry.path);
+              if (isDirectory) toggle(entry.path);
+              else select(entry.path);
+            }}
             style={{ paddingLeft: `${depth * 14 + 4}px` }}
             className="file-tree-entry"
           >
@@ -208,5 +333,10 @@ function ContextExplorer({ threadId, environmentId }: { threadId: string; enviro
     </>;
   }
 
-  return <div role="tree" aria-label="Project files">{renderDirectory("", 0)}</div>;
+  return <div role="tree" aria-label="Project files"
+    onFocusCapture={() => { treeHasFocus.current = true; }}
+    onBlurCapture={(event) => {
+      if (!event.currentTarget.contains(event.relatedTarget)) treeHasFocus.current = false;
+    }}
+  >{renderDirectory("", 0)}</div>;
 }
