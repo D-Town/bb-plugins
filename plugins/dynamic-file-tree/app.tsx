@@ -14,6 +14,15 @@ function StatusMessage({ children }: { children: ReactNode }) {
 }
 
 export function DynamicFileTreeTab(props: ExperimentalThreadTabProps) {
+  return (
+    <ContextFileTreeTab
+      key={JSON.stringify([props.threadId, props.environment?.id])}
+      {...props}
+    />
+  );
+}
+
+function ContextFileTreeTab(props: ExperimentalThreadTabProps) {
   const { threadId } = props;
   const environmentId = props.environment?.id;
   const rpc = useRpc<typeof rpcContract>();

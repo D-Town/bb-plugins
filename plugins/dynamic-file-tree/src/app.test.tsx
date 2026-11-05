@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup } from "@testing-library/react";
-import type { ExperimentalTabRegistration } from "@get-bb/plugin-sdk/app";
+import { useLayoutEffect } from "react";
+import type { ExperimentalTabRegistration, ExperimentalThreadTabProps } from "@get-bb/plugin-sdk/app";
 import { loadPluginApp, renderSlot } from "@get-bb/plugin-sdk/testing/app";
 import { rpcContract } from "./contracts";
 
@@ -58,6 +59,52 @@ describe("Dynamic File Tree app", () => {
     );
 
     expect(rendered.getByRole("status").textContent).toBe("Loading files…");
+  });
+
+  it.each([
+    { threadId: "thread_2", environment: { id: "env_1" } },
+    { threadId: "thread_1", environment: { id: "env_2" } },
+    { threadId: "thread_2", environment: { id: "env_2" } },
+  ])("hides the previous tree before effects on a switch to $threadId/$environment.id", async (nextContext) => {
+    const tab = await loadFixedThreadTab();
+    const Tab = tab.component;
+    const staleFilesAtCommit: boolean[] = [];
+    function ObservedTab(props: ExperimentalThreadTabProps) {
+      useLayoutEffect(() => {
+        if (props.threadId === nextContext.threadId && props.environment?.id === nextContext.environment.id) {
+          // Observe and try selection before the tab's passive reset effect runs.
+          const staleFile = document.querySelector<HTMLButtonElement>('button[aria-label="old.md"]');
+          staleFilesAtCommit.push(staleFile !== null);
+          staleFile?.click();
+        }
+      }, [props.threadId, props.environment?.id]);
+      return <Tab {...props} />;
+    }
+    let calls = 0;
+    const rendered = renderSlot(
+      { ...tab, component: ObservedTab },
+      { threadId: "thread_1", environment: { id: "env_1" } },
+      {
+        experimental_rpcContract: rpcContract,
+        rpc: {
+          tree_list: () => ++calls === 1
+            ? Promise.resolve({
+              outcome: "available" as const,
+              truncated: false,
+              entries: [{ path: "old.md", name: "old.md", kind: "file" as const }],
+            })
+            : new Promise(() => {}),
+        },
+      },
+    );
+    await rendered.findByRole("button", { name: "old.md" });
+
+    rendered.lifecycle.rerender(<ObservedTab {...nextContext} />);
+
+    expect(staleFilesAtCommit).toEqual([false]);
+    expect(rendered.queryByRole("button", { name: "old.md" })).toBeNull();
+    expect(rendered.getByRole("status").textContent).toBe("Loading files…");
+    expect(rendered.inspection.navigateCalls).toEqual([]);
   });
 
   it("opens a selected workspace file in BB preview", async () => {
