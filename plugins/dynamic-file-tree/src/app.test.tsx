@@ -28,7 +28,7 @@ describe("Dynamic File Tree app", () => {
     expect(captured.tabs[0]).toMatchObject({
       id: "dynamic-file-tree",
       title: "Dynamic File Tree",
-      icon: "FolderTree",
+      icon: "DynamicFileTreeIcon",
       availability: "fixed",
       context: { kind: "thread" },
       layout: "flush",

@@ -128,8 +128,8 @@ const explorerStyles = `
 .dynamic-file-tree .file-tree-name, .dynamic-file-tree .file-tree-icon, .dynamic-file-tree .file-tree-glyph { transition: color 1.2s ease; }
 .dynamic-file-tree .file-tree-activity-read { color: var(--filetree-read, #8b5cf6); }
 .dynamic-file-tree .file-tree-activity-write { color: var(--filetree-write, #f59e0b); }
-.dynamic-file-tree .file-tree-activity-read-shimmer { animation: file-tree-pulse-read 1.6s ease-in-out infinite alternate; }
-.dynamic-file-tree .file-tree-activity-write-shimmer { animation: file-tree-pulse-write 1.6s ease-in-out infinite alternate; }
+.dynamic-file-tree .file-tree-activity-read-shimmer { color: var(--filetree-read, #8b5cf6); animation: file-tree-pulse-read 1.6s ease-in-out infinite alternate; }
+.dynamic-file-tree .file-tree-activity-write-shimmer { color: var(--filetree-write, #f59e0b); animation: file-tree-pulse-write 1.6s ease-in-out infinite alternate; }
 .dynamic-file-tree .file-tree-status-added { padding: 0 4px; margin: 0 -4px; border-radius: 4px; background: color-mix(in srgb, var(--filetree-added, #22c55e) 13%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--filetree-added, #22c55e) 40%, transparent); }
 .dynamic-file-tree .file-tree-status-deleted { padding: 0 4px; margin: 0 -4px; border-radius: 4px; background: color-mix(in srgb, var(--filetree-deleted, #ef4444) 11%, transparent); color: var(--filetree-deleted, #ef4444); text-decoration: line-through; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--filetree-deleted, #ef4444) 35%, transparent); }
 @keyframes file-tree-pulse-read { from { opacity: .72; } to { opacity: 1; } }
@@ -714,13 +714,13 @@ function ContextExplorer({ threadId, environmentId }: { threadId: string; enviro
   return <div className="dynamic-file-tree" style={themeStyle}>
     <style>{explorerStyles}</style>
     <header className="file-tree-header">
-      <div className="file-tree-header-title"><Icon name="FolderTree" aria-hidden="true" className="file-tree-icon" /> <span>Filetree</span> <span className="file-tree-header-count">{visibleRows.length} items</span>{workspaceInfo?.branchName ? <span className="file-tree-branch"><Icon name="GitBranch" aria-hidden="true" className="file-tree-icon" /> {workspaceInfo.branchName}</span> : null}</div>
+      <div className="file-tree-header-title"><Icon name="DynamicFileTreeIcon" fallback="Folder" aria-hidden="true" className="file-tree-icon" /> <span>Filetree</span> <span className="file-tree-header-count">{visibleRows.length} items</span>{workspaceInfo?.branchName ? <span className="file-tree-branch">{workspaceInfo.branchName}</span> : null}</div>
       <span className="file-tree-header-spacer" />
       <button type="button" tabIndex={-1} className="file-tree-header-button" aria-label="Refresh filetree" title="Refresh filetree" onClick={refreshTree}>
-        <Icon name="RefreshCw" aria-hidden="true" />
+        <Icon name="DynamicRefreshIcon" fallback="RefreshCw" aria-hidden="true" />
       </button>
       <button type="button" tabIndex={-1} className="file-tree-header-button" aria-label="Filetree settings" aria-expanded={settingsOpen} onClick={() => setSettingsOpen((open) => !open)}>
-        <Icon name="Settings2" aria-hidden="true" />
+        <Icon name="DynamicSettingsIcon" fallback="Settings" aria-hidden="true" />
       </button>
     </header>
     {settingsOpen ? <div className="file-tree-settings" role="dialog" aria-label="Filetree settings">
