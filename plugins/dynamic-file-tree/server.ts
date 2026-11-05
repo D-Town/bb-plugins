@@ -8,6 +8,8 @@ export default async function plugin(bb: BbPluginApi) {
   const data = createServerData(bb);
 
   bb.rpc.register(rpcContract, {
+    // Activity normalization is added in a later task.
+    activity_snapshot: () => ({ available: false, activities: [] }),
     tree_list: (input) => data.listTree(input),
   });
 

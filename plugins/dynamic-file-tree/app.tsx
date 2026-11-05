@@ -1,8 +1,7 @@
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { definePluginApp, useBbNavigate, useRpc } from "@get-bb/plugin-sdk/app";
-import { experimental_InfoSection as InfoSection } from "@get-bb/plugin-sdk/app";
-import type { ExperimentalThreadInfoProps } from "@get-bb/plugin-sdk/app";
+import type { ExperimentalThreadTabProps } from "@get-bb/plugin-sdk/app";
 import { rpcContract, type ListTreeOutput } from "./src/contracts";
 import { FileTreeView } from "./src/components/FileTreeSection";
 
@@ -14,9 +13,9 @@ function StatusMessage({ children }: { children: ReactNode }) {
   );
 }
 
-export function FileTreeSection({
-  environment,
-}: ExperimentalThreadInfoProps) {
+export function DynamicFileTreeTab(props: ExperimentalThreadTabProps) {
+  const { threadId } = props;
+  const environmentId = props.environment?.id;
   const rpc = useRpc<typeof rpcContract>();
   const navigate = useBbNavigate();
   const [result, setResult] = useState<ListTreeOutput | null>(null);
@@ -27,7 +26,7 @@ export function FileTreeSection({
     setResult(null);
     setError(null);
 
-    if (environment === null) {
+    if (environmentId === undefined) {
       return () => {
         active = false;
       };
@@ -35,7 +34,7 @@ export function FileTreeSection({
 
     rpc
       .call("tree_list", {
-        environmentId: environment.id,
+        environmentId,
         includeHidden: false,
       })
       .then(
@@ -52,10 +51,10 @@ export function FileTreeSection({
     return () => {
       active = false;
     };
-  }, [environment, rpc]);
+  }, [threadId, environmentId, rpc]);
 
   let content: ReactNode;
-  if (environment === null) content = <StatusMessage>No active workspace.</StatusMessage>;
+  if (environmentId === undefined) content = <StatusMessage>No active workspace.</StatusMessage>;
   else if (error !== null) content = <div role="alert">Could not load files: {error}</div>;
   else if (result === null) content = <StatusMessage>Loading files…</StatusMessage>;
   else if (result.outcome === "unavailable") {
@@ -73,7 +72,7 @@ export function FileTreeSection({
           entries={result.entries}
           onSelect={(path) => {
             navigate.experimental_openFilePreview({
-              target: { kind: "workspace", environmentId: environment.id, path },
+              target: { kind: "workspace", environmentId, path },
               location: null,
             });
           }}
@@ -85,14 +84,21 @@ export function FileTreeSection({
     );
   }
 
-  return <InfoSection label="Files">{content}</InfoSection>;
+  return (
+    <div style={{ height: "100%", minHeight: 0, minWidth: 0, overflow: "auto" }}>
+      {content}
+    </div>
+  );
 }
 
 export default definePluginApp((app) => {
-  app.slots.experimental_threadInfoSection({
+  app.slots.experimental_tab({
     id: "dynamic-file-tree",
-    group: "2_changes",
-    order: 50,
-    component: FileTreeSection,
+    title: "Dynamic File Tree",
+    icon: "FolderTree",
+    availability: "fixed",
+    context: { kind: "thread" },
+    layout: "flush",
+    component: DynamicFileTreeTab,
   });
 });

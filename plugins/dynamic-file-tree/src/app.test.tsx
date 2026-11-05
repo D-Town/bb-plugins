@@ -1,27 +1,71 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { cleanup } from "@testing-library/react";
+import type { ExperimentalTabRegistration } from "@get-bb/plugin-sdk/app";
 import { loadPluginApp, renderSlot } from "@get-bb/plugin-sdk/testing/app";
 import { rpcContract } from "./contracts";
 
+afterEach(cleanup);
+
+async function loadFixedThreadTab() {
+  const captured = await loadPluginApp(() => import("../app"));
+  const tab = captured.tabs.find(
+    (tab): tab is Extract<ExperimentalTabRegistration, {
+      availability: "fixed";
+      context: { kind: "thread" };
+    }> => tab.availability === "fixed" && tab.context.kind === "thread",
+  );
+  if (!tab) throw new Error("Expected a fixed thread tab");
+  return tab;
+}
+
 describe("Dynamic File Tree app", () => {
-  it("registers a section in the thread info panel", async () => {
+  it("registers a fixed thread tab without a Thread Info section", async () => {
     const captured = await loadPluginApp(() => import("../app"));
 
-    expect(captured.threadInfoSections).toHaveLength(1);
-    expect(captured.threadInfoSections[0]).toMatchObject({
+    expect(captured.tabs).toHaveLength(1);
+    expect(captured.tabs[0]).toMatchObject({
       id: "dynamic-file-tree",
-      group: "2_changes",
+      title: "Dynamic File Tree",
+      icon: "FolderTree",
+      availability: "fixed",
+      context: { kind: "thread" },
+      layout: "flush",
     });
+    expect(captured.threadInfoSections).toHaveLength(0);
+  });
+
+  it("shows the no-environment state without fetching files", async () => {
+    const tab = await loadFixedThreadTab();
+    const rendered = renderSlot(tab, {
+      threadId: "thread_1",
+      environment: null,
+    });
+
+    expect(rendered.getByRole("status").textContent).toBe("No active workspace.");
+    expect(rendered.inspection.rpcCalls).toEqual([]);
+  });
+
+  it("shows loading while the environment tree is pending", async () => {
+    const tab = await loadFixedThreadTab();
+    const rendered = renderSlot(
+      tab,
+      { threadId: "thread_1", environment: { id: "env_1" } },
+      {
+        experimental_rpcContract: rpcContract,
+        rpc: { tree_list: () => new Promise(() => {}) },
+      },
+    );
+
+    expect(rendered.getByRole("status").textContent).toBe("Loading files…");
   });
 
   it("opens a selected workspace file in BB preview", async () => {
-    const captured = await loadPluginApp(() => import("../app"));
-    const section = captured.threadInfoSections[0];
+    const tab = await loadFixedThreadTab();
     const rendered = renderSlot(
-      section,
+      tab,
       {
         threadId: "thread_1",
-        projectId: "project_1",
         environment: { id: "env_1" },
       },
       {
@@ -52,5 +96,35 @@ describe("Dynamic File Tree app", () => {
         location: null,
       },
     });
+  });
+});
+
+describe("activity_snapshot contract", () => {
+  it("accepts all activity kinds and BB row statuses", () => {
+    const activities = [
+      { activityId: "a1", path: "src/app.ts", kind: "read", status: "completed" },
+      { activityId: "a2", path: "src/app.ts", kind: "write", status: "error" },
+      { activityId: "a3", path: "src", kind: "search", status: "interrupted" },
+      { activityId: "a4", path: ".", kind: "list", status: "pending" },
+    ];
+
+    expect(rpcContract.activity_snapshot.input.parse({ threadId: "thread_1" }))
+      .toEqual({ threadId: "thread_1" });
+    expect(rpcContract.activity_snapshot.output.parse({ available: true, activities }))
+      .toEqual({ available: true, activities });
+    expect(rpcContract.activity_snapshot.output.parse({ available: false, activities: [] }))
+      .toEqual({ available: false, activities: [] });
+  });
+
+  it("rejects an empty thread id and unsupported activity kinds or statuses", () => {
+    expect(rpcContract.activity_snapshot.input.safeParse({ threadId: "" }).success).toBe(false);
+    for (const activity of [
+      { activityId: "a1", path: "src/app.ts", kind: "execute", status: "pending" },
+      { activityId: "a1", path: "src/app.ts", kind: "read", status: "running" },
+    ]) {
+      expect(rpcContract.activity_snapshot.output.safeParse({
+        available: true, activities: [activity],
+      }).success).toBe(false);
+    }
   });
 });
