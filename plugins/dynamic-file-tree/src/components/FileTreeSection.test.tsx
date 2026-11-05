@@ -9,7 +9,10 @@ import { collectActiveActivities } from "../activity-model";
 import { rpcContract } from "../contracts";
 import type { ActivePathActivity, ActivitySnapshotOutput, ListTreeInput, ListTreeOutput, TreeEntry } from "../contracts";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  sessionStorage.clear();
+});
 
 const context = { threadId: "thread_1", environment: { id: "env_1" } };
 const directory = (path: string): TreeEntry => ({ path, name: path.split("/").at(-1)!, kind: "directory", hasChildren: true });
@@ -82,6 +85,20 @@ describe("fixed-tab file explorer", () => {
     fireEvent.click(src);
     expect(view.getByRole("button", { name: "app.ts" })).toBeTruthy();
     expect(requests(view)).toHaveLength(2);
+  });
+
+  it("restores manual expansion when returning to the same thread and workspace", async () => {
+    const view = mount({ tree_list: ({ path }) => path === "" ? available("", listings[""]) : available(path ?? "") });
+    fireEvent.click(await view.findByRole("button", { name: "src" }));
+    await view.findByRole("button", { name: "app.ts" });
+
+    view.lifecycle.rerender(<DynamicFileTreeTab threadId="thread_2" environment={{ id: "env_1" }} />);
+    await view.findByRole("button", { name: "src" });
+    expect(view.getByRole("button", { name: "src" }).getAttribute("aria-expanded")).toBe("false");
+
+    view.lifecycle.rerender(<DynamicFileTreeTab {...context} />);
+    await view.findByRole("button", { name: "app.ts" });
+    expect(view.getByRole("button", { name: "src" }).getAttribute("aria-expanded")).toBe("true");
   });
 
   it("keeps child loading local and deduplicates an in-flight folder request", async () => {
@@ -283,6 +300,17 @@ describe("explorer row presentation and preview", () => {
       expect(label?.getAttribute("title")).toContain(status);
     }
     expect(view.getByRole("button", { name: "clean.md" }).querySelector('.file-tree-git-state')).toBeNull();
+  });
+
+  it("shows additions and deletions for changed files and folders", async () => {
+    const view = mount({ tree_list: () => available("", [
+      { ...directory("src"), gitState: "modified", additions: 12, deletions: 4 },
+      { ...file("app.ts"), gitState: "modified", additions: 12, deletions: 4 },
+    ]) });
+    await view.findByRole("treeitem", { name: "src" });
+    expect(view.getByRole("button", { name: "src" }).textContent).toContain("+12");
+    expect(view.getByRole("button", { name: "src" }).textContent).toContain("−4");
+    expect(view.getByRole("button", { name: "src" }).getAttribute("aria-label")).toBe("src");
   });
 
   it("uses native preview for binary and unknown files without reading fallback content", async () => {

@@ -60,12 +60,24 @@ const explorerStyles = `
 .dynamic-file-tree .file-tree-chevron { width: 12px; height: 12px; flex: 0 0 12px; }
 .dynamic-file-tree .file-tree-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dynamic-file-tree .file-tree-git-state { margin-left: auto; padding-left: 8px; font-size: 11px; font-weight: 600; }
+.dynamic-file-tree .file-tree-diff-stats { display: inline-flex; gap: 5px; padding-left: 8px; font-size: 10px; font-weight: 600; }
+.dynamic-file-tree .file-tree-additions { color: var(--success, #38854b); }
+.dynamic-file-tree .file-tree-deletions { color: var(--destructive, #cf4545); }
 .dynamic-file-tree [data-git=modified], .dynamic-file-tree [data-git=renamed] { color: var(--warning, #ad7900); }
 .dynamic-file-tree [data-git=added], .dynamic-file-tree [data-git=untracked] { color: var(--success, #38854b); }
 .dynamic-file-tree [data-git=deleted] { color: var(--destructive, #cf4545); }
 .dynamic-file-tree .file-tree-preview { border-top: 1px solid var(--border, color-mix(in srgb, currentColor 16%, transparent)); margin-top: 8px; padding: 8px; }
 .dynamic-file-tree .file-tree-preview pre { max-height: 320px; overflow: auto; font: inherit; white-space: pre; }
 `;
+
+function readManualExpansion(storageKey: string): ReadonlySet<string> {
+  try {
+    const value: unknown = JSON.parse(sessionStorage.getItem(storageKey) ?? "[]");
+    return new Set(Array.isArray(value) ? value.filter((path): path is string => typeof path === "string" && path.length > 0) : []);
+  } catch {
+    return new Set();
+  }
+}
 
 function StatusMessage({ children, label }: { children: ReactNode; label?: string }) {
   return (
@@ -90,8 +102,9 @@ function ContextExplorer({ threadId, environmentId }: { threadId: string; enviro
   const rpc = useRpc<typeof rpcContract>();
   const navigate = useBbNavigate();
   const connectionState = useRealtimeConnectionState();
+  const expansionStorageKey = `dynamic-file-tree:manual-expanded:${threadId}:${environmentId}`;
   const [state, setState] = useState<ExplorerState>(() => ({
-    manualExpanded: new Set(),
+    manualExpanded: readManualExpansion(expansionStorageKey),
     autoExpanded: new Set(),
     selectedPath: null,
     directories: new Map(),
@@ -115,6 +128,14 @@ function ContextExplorer({ threadId, environmentId }: { threadId: string; enviro
     stateRef.current = next;
     setState(next);
   }, []);
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(expansionStorageKey, JSON.stringify([...state.manualExpanded]));
+    } catch {
+      // Storage may be unavailable in embedded or privacy-restricted contexts.
+    }
+  }, [expansionStorageKey, state.manualExpanded]);
 
   const loadDirectory = useCallback((path: string, retry = false): void => {
     if (!mounted.current) return;
@@ -218,12 +239,15 @@ function ContextExplorer({ threadId, environmentId }: { threadId: string; enviro
     for (let offset = 0; offset < annotationPaths.length; offset += 10_000) {
       rpc.call("tree_git", { environmentId, paths: annotationPaths.slice(offset, offset + 10_000) }).then((annotations) => {
         if (!mounted.current || request !== gitRequest.current) return;
-        const states = new Map(annotations.entries.map((entry) => [entry.path, entry.gitState]));
+        const annotationsByPath = new Map(annotations.entries.map((entry) => [entry.path, entry]));
         updateState((current) => ({ ...current, directories: new Map([...current.directories].map(([path, directory]) => {
           if (directory.status !== "loaded" || directory.result.outcome !== "available") return [path, directory];
           return [path, { ...directory, result: { ...directory.result, gitAvailable: annotations.gitAvailable,
             // A directory listing may have supplied fresher annotations while this request ran.
-            entries: directory.result.entries.map((entry) => states.has(entry.path) && entry === requestedEntries.get(entry.path) ? { ...entry, gitState: states.get(entry.path) } : entry),
+            entries: directory.result.entries.map((entry) => {
+              const annotation = annotationsByPath.get(entry.path);
+              return annotation !== undefined && entry === requestedEntries.get(entry.path) ? { ...entry, ...annotation } : entry;
+            }),
           } }];
         })) }));
       }, () => { /* Annotation failure must not disturb file membership. */ });
@@ -303,6 +327,18 @@ function ContextExplorer({ threadId, environmentId }: { threadId: string; enviro
       }
     }
   }, [state.autoExpanded, state.directories, loadDirectory]);
+
+  useEffect(() => {
+    // Rehydrate manually opened branches after the tab returns from a native preview.
+    for (const path of state.manualExpanded) {
+      const parent = path.slice(0, Math.max(0, path.lastIndexOf("/")));
+      const cached = state.directories.get(parent);
+      if (cached?.status === "loaded" && cached.result.outcome === "available" &&
+          cached.result.entries.some((entry) => entry.path === path && entry.kind === "directory")) {
+        loadDirectory(path);
+      }
+    }
+  }, [state.manualExpanded, state.directories, loadDirectory]);
 
   const toggle = (path: string) => {
     const opening = !stateRef.current.manualExpanded.has(path);
@@ -472,6 +508,7 @@ function ContextExplorer({ threadId, environmentId }: { threadId: string; enviro
           aria-selected={selected}
           aria-description={[
             entry.gitState && entry.gitState !== "clean" ? `Git: ${gitStateLabels[entry.gitState]}.` : "",
+            entry.additions || entry.deletions ? `Diff: +${entry.additions ?? 0}, -${entry.deletions ?? 0}.` : "",
             isDirectory && expanded && failed ? "Could not load children. Press ArrowRight to retry." : "",
           ].filter(Boolean).join(" ") || undefined}
           onFocus={(event) => {
@@ -497,6 +534,10 @@ function ContextExplorer({ threadId, environmentId }: { threadId: string; enviro
             <Icon name={entryIcon(entry, expanded)} fallback="File" aria-hidden="true" className="file-tree-icon" />
             <span className="file-tree-name">{entry.name}</span>
             {entry.gitState && entry.gitState !== "clean" ? <span aria-hidden="true" data-git={entry.gitState} title={`Git: ${gitStateLabels[entry.gitState]}`} className="file-tree-git-state">{gitMarkers[entry.gitState]}</span> : null}
+            {entry.additions || entry.deletions ? <span className="file-tree-diff-stats" aria-hidden="true" title={`Diff: +${entry.additions ?? 0}, -${entry.deletions ?? 0}`}>
+              <span className="file-tree-additions">+{entry.additions ?? 0}</span>
+              <span className="file-tree-deletions">−{entry.deletions ?? 0}</span>
+            </span> : null}
           </button>
           {isDirectory && expanded ? <div role="group">{renderDirectory(entry.path, depth + 1)}</div> : null}
         </div>;

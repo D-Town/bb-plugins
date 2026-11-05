@@ -7,8 +7,8 @@ import { createServerData } from "./server-data";
 
 const disposals: Array<() => Promise<void>> = [];
 afterEach(async () => { await Promise.all(disposals.splice(0).map((dispose) => dispose())); });
-const gitFile = (path: string, changeKind = "modified", origin = "tracked") => ({
-  path, previousPath: null, changeKind, origin, additions: 1, deletions: 0,
+const gitFile = (path: string, changeKind = "modified", origin = "tracked", additions = 0, deletions = 0) => ({
+  path, previousPath: null, changeKind, origin, additions, deletions,
   binary: false, loadMode: "auto", revision: "rev_1",
 });
 const gitResult = {
@@ -74,6 +74,17 @@ describe("direct environment directory data", () => {
       entries: [{ path: "src/app.ts", name: "app.ts", kind: "file", gitState: "modified" }],
     });
     expect(harness.inspection.sdk.callsTo("hosts.directory")[0]?.[0]).toEqual({ hostId: "remote_host", path: "/workspace/project/src" });
+  });
+
+  it("attaches Git line stats to files and aggregates them on folders", async () => {
+    const { data } = setup({ git: {
+      ...gitResult,
+      files: [gitFile("src/app.ts", "modified", "tracked", 12, 4)],
+    } });
+    const root = await data.listTree({ environmentId: "env_1", path: "" });
+    const nested = await data.listTree({ environmentId: "env_1", path: "src" });
+    expect(root.outcome === "available" && root.entries.find((entry) => entry.path === "src")).toMatchObject({ additions: 12, deletions: 4 });
+    expect(nested.outcome === "available" && nested.entries.find((entry) => entry.path === "src/app.ts")).toMatchObject({ additions: 12, deletions: 4 });
   });
 
   it("returns an empty directory as an available empty listing", async () => {
@@ -224,5 +235,19 @@ describe("Git annotation refresh", () => {
     });
     expect(harness.inspection.sdk.callsTo("hosts.directory")).toHaveLength(0);
     expect(harness.inspection.sdk.callsTo("plugins.callRpc")[0]?.[0]).toMatchObject({ input: { environmentId: "env_1" } });
+  });
+
+  it("returns Git line stats for targeted annotation refreshes", async () => {
+    const { bb, harness } = setup({ git: {
+      ...gitResult,
+      files: [gitFile("src/app.ts", "modified", "tracked", 12, 4)],
+    } });
+    await plugin(bb);
+    expect(await harness.behavior.callRpc("tree_git", { environmentId: "env_1", paths: ["src", "src/app.ts"] })).toEqual({
+      gitAvailable: "available", entries: [
+        { path: "src", gitState: "modified", additions: 12, deletions: 4 },
+        { path: "src/app.ts", gitState: "modified", additions: 12, deletions: 4 },
+      ],
+    });
   });
 });

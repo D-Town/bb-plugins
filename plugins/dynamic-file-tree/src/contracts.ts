@@ -48,6 +48,8 @@ const treeEntrySchema: z.ZodType<TreeEntry> = z.lazy(() =>
     hasChildren: z.boolean().optional(),
     children: z.array(treeEntrySchema).optional(),
     gitState: gitStateSchema.optional(),
+    additions: z.number().int().nonnegative().optional(),
+    deletions: z.number().int().nonnegative().optional(),
   }),
 );
 
@@ -95,7 +97,12 @@ export const treeGitInputSchema = z.strictObject({
 });
 export const treeGitOutputSchema = z.strictObject({
   gitAvailable: z.enum(["available", "not_applicable", "unavailable"]),
-  entries: z.array(z.strictObject({ path: boundedPath, gitState: gitStateSchema.optional() })).max(10_000),
+  entries: z.array(z.strictObject({
+    path: boundedPath,
+    gitState: gitStateSchema.optional(),
+    additions: z.number().int().nonnegative().optional(),
+    deletions: z.number().int().nonnegative().optional(),
+  })).max(10_000),
 });
 
 export const rpcContract = defineRpcContract({

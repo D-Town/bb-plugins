@@ -11,6 +11,8 @@ export type ListedPath = {
   kind: "file" | "directory";
   hasChildren?: boolean;
   gitState?: GitState;
+  additions?: number;
+  deletions?: number;
 };
 
 export type TreeEntry = ListedPath & {

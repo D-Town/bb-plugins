@@ -61,6 +61,16 @@ function mapGitState(changeKind: z.infer<typeof gitFileSchema>["changeKind"], or
   }
 }
 
+type DiffStats = { additions: number; deletions: number };
+
+function addDiffStats(target: Map<string, DiffStats>, path: string, additions: number, deletions: number) {
+  const previous = target.get(path) ?? { additions: 0, deletions: 0 };
+  target.set(path, {
+    additions: previous.additions + additions,
+    deletions: previous.deletions + deletions,
+  });
+}
+
 const finishedChangeSchema = z.object({
   id: z.string().min(1), kind: z.literal("work"), workKind: z.literal("file-change"),
   status: z.enum(["completed", "error", "interrupted"]), change: z.object({ path: z.string() }),
@@ -88,6 +98,7 @@ export function createServerData(bb: BbPluginApi) {
     let gitAvailable: "available" | "not_applicable" | "unavailable" = "unavailable";
     const changed = new Map<string, GitState>();
     const changedFolders = new Set<string>();
+    const changedStats = new Map<string, DiffStats>();
     try {
       const git = await bb.sdk.plugins.callRpc({
         pluginId: "bb--git",
@@ -105,8 +116,11 @@ export function createServerData(bb: BbPluginApi) {
           try {
             const segments = assertWorkspaceRelative(file.path);
             changed.set(file.path, mapGitState(file.changeKind, file.origin));
+            addDiffStats(changedStats, file.path, file.additions, file.deletions);
             for (let i = 1; i < segments.length; i++) {
-              changedFolders.add(segments.slice(0, i).join("/"));
+              const folder = segments.slice(0, i).join("/");
+              changedFolders.add(folder);
+              addDiffStats(changedStats, folder, file.additions, file.deletions);
             }
             if (file.previousPath !== null) {
               const previous = assertWorkspaceRelative(file.previousPath);
@@ -123,7 +137,7 @@ export function createServerData(bb: BbPluginApi) {
       // Keep the requested filesystem listing available without Git markers.
     }
 
-    return { gitAvailable, changed, changedFolders };
+    return { gitAvailable, changed, changedFolders, changedStats };
   }
 
   async function treeGit(input: TreeGitInput): Promise<TreeGitOutput> {
@@ -134,12 +148,14 @@ export function createServerData(bb: BbPluginApi) {
     } catch {
       return { gitAvailable: "unavailable", entries: [] };
     }
-    const { gitAvailable, changed, changedFolders } = await readGit(input.environmentId);
+    const { gitAvailable, changed, changedFolders, changedStats } = await readGit(input.environmentId);
     return {
       gitAvailable,
       entries: input.paths.map((path) => {
         const gitState = changed.get(path) ?? (changedFolders.has(path) ? "modified" : undefined);
-        return { path, ...(gitState === undefined ? {} : { gitState }) };
+        const candidate = changedStats.get(path);
+        const stats = candidate && (candidate.additions > 0 || candidate.deletions > 0) ? candidate : undefined;
+        return { path, ...(gitState === undefined ? {} : { gitState }), ...(stats ?? {}) };
       }),
     };
   }
@@ -241,7 +257,7 @@ export function createServerData(bb: BbPluginApi) {
       return { outcome: "unavailable", directory: input.path, reason: "directory_unavailable" };
     }
 
-    const { gitAvailable, changed, changedFolders } = await readGit(input.environmentId);
+    const { gitAvailable, changed, changedFolders, changedStats } = await readGit(input.environmentId);
 
     return {
       outcome: "available",
@@ -250,7 +266,9 @@ export function createServerData(bb: BbPluginApi) {
         const gitState = entry.kind === "directory"
           ? (changedFolders.has(entry.path) ? "modified" : undefined)
           : changed.get(entry.path);
-        return { ...entry, ...(gitState === undefined ? {} : { gitState }) };
+        const candidate = changedStats.get(entry.path);
+        const stats = candidate && (candidate.additions > 0 || candidate.deletions > 0) ? candidate : undefined;
+        return { ...entry, ...(gitState === undefined ? {} : { gitState }), ...(stats ?? {}) };
       })),
       gitAvailable,
       truncated,
