@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import { createFakePluginHost, makeThreadResponse } from "@get-bb/plugin-sdk/testing";
 import plugin from "../server";
@@ -71,6 +71,39 @@ describe("activity snapshot and realtime bridge", () => {
       { channel: "activity-updated", payload: { threadId: "thread_2", sequence: 20, available: true,
         activities: [{ activityId: "read_thread_2", path: "src/app.ts", kind: "read", status: "pending" }] } },
     ]);
+  });
+
+  it.each([false, true])("contains publisher failure and attempts cleanup (fallback throws=%s)", async (fallbackThrows) => {
+    const { bb, harness } = setup();
+    await plugin(bb);
+    const thread = makeThreadResponse({ id: "thread_1" });
+    await harness.behavior.emitThreadEvent("experimental_thread.events", { thread, sequence: 1 });
+    const publish = bb.realtime.publish.bind(bb.realtime);
+    const publisher = vi.spyOn(bb.realtime, "publish")
+      .mockImplementationOnce(() => { throw new Error("publisher offline"); })
+      .mockImplementationOnce((channel, payload) => {
+        if (fallbackThrows) throw new Error("fallback offline");
+        publish(channel, payload);
+      });
+
+    // The harness reports escaped handler errors even though core dispatch is fire-and-forget.
+    expect(await harness.behavior.emitThreadEvent("experimental_thread.events", { thread, sequence: 2 })).toEqual({ errors: [] });
+    expect(publisher).toHaveBeenCalledTimes(2);
+    expect(publisher).toHaveBeenNthCalledWith(2, "activity-updated", {
+      threadId: "thread_1", sequence: 2, available: false, activities: [],
+    });
+    if (!fallbackThrows) expect(harness.inspection.realtimeSignals.at(-1)).toEqual({
+      channel: "activity-updated", payload: { threadId: "thread_1", sequence: 2, available: false, activities: [] },
+    });
+    const errors = harness.inspection.logEntries.filter((entry) => entry.level === "error");
+    expect(errors).toHaveLength(fallbackThrows ? 2 : 1);
+    expect(errors[0]?.message).toContain("publisher offline");
+    if (fallbackThrows) expect(errors[1]?.message).toContain("fallback offline");
+
+    publisher.mockRestore();
+    expect(await harness.behavior.emitThreadEvent("experimental_thread.events", { thread, sequence: 3 })).toEqual({ errors: [] });
+    expect(harness.inspection.realtimeSignals.at(-1)?.payload).toMatchObject({ threadId: "thread_1", sequence: 3, available: true });
+    expect(await harness.behavior.callRpc("activity_snapshot", { threadId: "thread_1" })).toMatchObject({ available: true });
   });
 
   it("publishes empty cleanup and unavailable fallback instead of leaving stale activity", async () => {

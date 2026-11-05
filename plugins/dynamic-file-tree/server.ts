@@ -14,11 +14,26 @@ export default async function plugin(bb: BbPluginApi) {
 
   bb.events.on("experimental_thread.events", async ({ thread, sequence }) => {
     const snapshot = await data.activitySnapshot({ threadId: thread.id });
-    bb.realtime.publish("activity-updated", {
-      threadId: thread.id,
-      sequence,
-      ...snapshot,
-    } satisfies ActivityUpdated);
+    try {
+      bb.realtime.publish("activity-updated", {
+        threadId: thread.id,
+        sequence,
+        ...snapshot,
+      } satisfies ActivityUpdated);
+    } catch (error) {
+      bb.log.error(`Activity publish failed for thread ${thread.id}: ${String(error)}`);
+      try {
+        // Clear previously delivered activity if the publisher can still send.
+        bb.realtime.publish("activity-updated", {
+          threadId: thread.id,
+          sequence,
+          available: false,
+          activities: [],
+        } satisfies ActivityUpdated);
+      } catch (fallbackError) {
+        bb.log.error(`Activity fallback publish failed for thread ${thread.id}: ${String(fallbackError)}`);
+      }
+    }
   });
 
   bb.log.info("loaded");
