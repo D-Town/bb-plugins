@@ -377,6 +377,21 @@ function ContextExplorer({ threadId, environmentId }: { threadId: string; enviro
   });
 
   useEffect(() => {
+    if (connectionState !== "connected") return;
+    let active = true;
+    rpc.call("activity", { threadId }).then((snapshot) => {
+      if (!active) return;
+      updateState((current) => ({
+        ...current,
+        activity: new Map(snapshot.files.map((file) => [file.path, { kind: file.kind, atMs: file.atMs }])),
+        status: new Map(snapshot.status.map((marker) => [marker.path, { addedAt: marker.addedAt, deletedAt: marker.deletedAt }])),
+        autoExpanded: new Set(snapshot.files.flatMap((file) => ancestorPaths(file.path))),
+      }));
+    }, () => { /* The legacy snapshot remains a usable fallback. */ });
+    return () => { active = false; };
+  }, [connectionState, rpc, threadId, updateState]);
+
+  useEffect(() => {
     mounted.current = true;
     loadDirectory("");
     return () => {
