@@ -56,6 +56,23 @@ const fileIcons: Record<string, string> = {
   png: "Image", jpg: "Image", jpeg: "Image", gif: "Image", svg: "Image", webp: "Image", ico: "Image",
   json: "Settings", yaml: "Settings", yml: "Settings", toml: "Settings",
 };
+const fileIconColors: Record<string, string> = {
+  ts: "#3178c6", tsx: "#7c6cff", js: "#f0db4f", jsx: "#f0db4f",
+  py: "#3776ab", java: "#e76f00", php: "#777bb4", rs: "#ce422b", go: "#00add8",
+  css: "#563d7c", scss: "#c6538c", less: "#1d365d", html: "#e44d26",
+  md: "#6cb6ff", mdx: "#6cb6ff", txt: "#9ca3af", rst: "#9ca3af",
+  json: "#e8a317", yaml: "#e8a317", yml: "#e8a317", toml: "#e8a317",
+  png: "#a855f7", jpg: "#a855f7", jpeg: "#a855f7", gif: "#a855f7", svg: "#a855f7", webp: "#a855f7", ico: "#a855f7",
+};
+const specialFileIconColors: Record<string, string> = {
+  ".gitignore": "#f05032", ".gitattributes": "#f05032", ".editorconfig": "#f1c40f", ".npmrc": "#cb3837", ".env": "#f1c40f",
+};
+export function fileIconColor(entry: TreeEntry): string | undefined {
+  if (entry.kind === "directory") return undefined;
+  const name = entry.name.toLowerCase();
+  if (specialFileIconColors[name]) return specialFileIconColors[name];
+  return fileIconColors[name.split(".").at(-1) ?? ""];
+}
 function entryIcon(entry: TreeEntry, expanded: boolean) {
   if (entry.kind === "directory") return expanded ? "FolderOpen" : "Folder";
   if ([".gitignore", ".gitattributes", ".editorconfig", ".npmrc", ".env"].includes(entry.name.toLowerCase())) return "Settings";
@@ -686,8 +703,8 @@ function ContextExplorer({ threadId, environmentId }: { threadId: string; enviro
           >
             {isDirectory ? <Icon name={expanded ? "ChevronDown" : "ChevronRight"} aria-hidden="true" className="file-tree-chevron" /> : <span aria-hidden="true" className="file-tree-chevron" />}
             {prefs.useNerdFontIcons
-              ? <span aria-hidden="true" className={`file-tree-glyph ${activityClass}`}>{entryGlyph(entry, expanded)}</span>
-              : <Icon name={entryIcon(entry, expanded)} fallback="File" aria-hidden="true" className={`file-tree-icon ${activityClass}`} />}
+              ? <span aria-hidden="true" style={activityClass ? undefined : { color: fileIconColor(entry) }} className={`file-tree-glyph ${activityClass}`}>{entryGlyph(entry, expanded)}</span>
+              : <Icon name={entryIcon(entry, expanded)} fallback="File" aria-hidden="true" style={activityClass ? undefined : { color: fileIconColor(entry) }} className={`file-tree-icon ${activityClass}`} />}
             <span className={`file-tree-name ${activityClass} ${markerClass}`}>{displayName}</span>
             {hasMetadata ? <span className="file-tree-meta">
               {entry.gitState && entry.gitState !== "clean" ? <span aria-hidden="true" data-git={entry.gitState} title={`Git: ${gitStateLabels[entry.gitState]}`} className="file-tree-git-state">{gitMarkers[entry.gitState]}</span> : null}

@@ -19,6 +19,7 @@ const gitResult = {
 function setup(options: {
   workspace?: string | null; environmentError?: boolean; directoryError?: boolean;
   git?: unknown; gitError?: boolean; entries?: Array<{ name: string; path: string; kind: "file" | "directory" }>;
+  hiddenEntries?: Array<{ name: string; path: string; kind: "file" | "directory" }>;
 } = {}) {
   const host = createFakePluginHost({ sdk: {
     environments: { get: async () => {
@@ -39,6 +40,12 @@ function setup(options: {
         ]),
       };
     } },
+    files: { listPaths: async ({ path }) => ({
+      paths: (options.hiddenEntries ?? []).filter((entry) => entry.path.startsWith(`${path}/`)).map((entry) => ({
+        ...entry, path: entry.path.slice(`${path}/`.length),
+      })),
+      truncated: false,
+    }) },
     plugins: { callRpc: async () => {
       if (options.gitError) throw new Error("Git unavailable");
       return options.git ?? gitResult;
@@ -49,6 +56,17 @@ function setup(options: {
 }
 
 describe("direct environment directory data", () => {
+  it("includes hidden directories from the path listing", async () => {
+    const { data } = setup({ entries: [], hiddenEntries: [
+      { name: ".github", path: "/workspace/project/.github", kind: "directory" },
+      { name: "workflows", path: "/workspace/project/.github/workflows", kind: "directory" },
+    ] });
+    const result = await data.listTree({ environmentId: "env_1", path: "" });
+    expect(result).toMatchObject({ outcome: "available", entries: [
+      { path: ".github", name: ".github", kind: "directory" },
+    ] });
+  });
+
   it("lists only root entries, including dotfiles, and annotates changed descendants", async () => {
     const { data, harness } = setup();
     expect(await data.listTree({ environmentId: "env_1", path: "" })).toEqual({
@@ -61,7 +79,10 @@ describe("direct environment directory data", () => {
       ],
     });
     expect(harness.inspection.sdk.callsTo("hosts.directory")[0]?.[0]).toEqual({ hostId: "remote_host", path: "/workspace/project" });
-    expect(harness.inspection.sdk.callsTo("files.listPaths")).toHaveLength(0);
+    expect(harness.inspection.sdk.callsTo("files.listPaths")[0]?.[0]).toMatchObject({
+      hostId: "remote_host", path: "/workspace/project", includeHidden: true,
+      includeFiles: true, includeDirectories: true,
+    });
     expect(harness.inspection.sdk.callsTo("plugins.callRpc")[0]?.[0]).toMatchObject({
       pluginId: "bb--git", method: "files", input: { environmentId: "env_1", target: { type: "uncommitted" }, ignoreWhitespace: false },
     });

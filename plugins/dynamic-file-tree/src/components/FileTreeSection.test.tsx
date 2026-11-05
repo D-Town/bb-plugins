@@ -5,6 +5,7 @@ import type { PluginRealtimeConnectionState } from "@get-bb/plugin-sdk/app";
 import { renderSlot } from "@get-bb/plugin-sdk/testing/app";
 import type { PluginRpcTestHandlers } from "@get-bb/plugin-sdk/testing/app";
 import { DynamicFileTreeTab } from "../../app";
+import { fileIconColor } from "./FileTreeSection";
 import { collectActiveActivities } from "../activity-model";
 import { rpcContract } from "../contracts";
 import type { ActivePathActivity, ActivitySnapshotOutput, ListTreeInput, ListTreeOutput, TreeEntry } from "../contracts";
@@ -67,6 +68,18 @@ async function update(view: ReturnType<typeof mount>, activities: ActivePathActi
 }
 
 describe("fixed-tab file explorer", () => {
+  it("maps common file types to one stable icon color", () => {
+    expect(fileIconColor(file("src/app.ts"))).toBe("#3178c6");
+    expect(fileIconColor(file("src/App.tsx"))).toBe("#7c6cff");
+    expect(fileIconColor(file("src/app.js"))).toBe("#f0db4f");
+    expect(fileIconColor(file("config.json"))).toBe("#e8a317");
+    expect(fileIconColor(file("README.md"))).toBe("#6cb6ff");
+    expect(fileIconColor(file("Main.java"))).toBe("#e76f00");
+    expect(fileIconColor(file("index.php"))).toBe("#777bb4");
+    expect(fileIconColor(file("unknown.bin"))).toBeUndefined();
+    expect(fileIconColor(directory("src"))).toBeUndefined();
+  });
+
   it("loads the scoped root with initially collapsed directories and visible dotfiles", async () => {
     const view = mount();
     const src = await view.findByRole("button", { name: "src" });

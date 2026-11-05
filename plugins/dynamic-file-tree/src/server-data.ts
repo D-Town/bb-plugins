@@ -311,6 +311,34 @@ export function createServerData(bb: BbPluginApi) {
         }
         return { path: input.path === "" ? entry.name : `${input.path}/${entry.name}`, kind: entry.kind };
       });
+      // hosts.directory currently omits dot-directories on some hosts. Augment
+      // the direct listing from the path API, which supports hidden entries.
+      try {
+        const hidden = await bb.sdk.files.listPaths({
+          hostId: environment.hostId,
+          path: absoluteDirectory,
+          includeFiles: true,
+          includeDirectories: true,
+          includeHidden: true,
+          excludeNames: [],
+          limit: 10_000,
+        });
+        const hiddenDirectChildren = hidden.paths.flatMap((entry) => {
+          const rawPath = entry.path.replaceAll("\\", "/");
+          let relative = hostPath.isAbsolute(rawPath)
+            ? hostPath.relative(absoluteDirectory, hostPath.normalize(rawPath)).replaceAll("\\", "/")
+            : rawPath;
+          const requestedPrefix = input.path ? `${input.path}/` : "";
+          if (requestedPrefix && relative.startsWith(requestedPrefix)) relative = relative.slice(requestedPrefix.length);
+          const segments = relative.split("/").filter(Boolean);
+          const name = segments[0];
+          if (segments.length !== 1 || !name?.startsWith(".")) return [];
+          return [{ path: input.path === "" ? name : `${input.path}/${name}`, kind: entry.kind }];
+        });
+        listed.push(...hiddenDirectChildren);
+      } catch {
+        // A path-list failure must not hide an otherwise readable directory.
+      }
       listed = buildTree(listed);
       truncated = listed.length > 10_000;
       listed = listed.slice(0, 10_000);
