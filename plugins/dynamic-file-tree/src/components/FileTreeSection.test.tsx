@@ -48,6 +48,13 @@ function mount(handlers: Partial<PluginRpcTestHandlers<typeof rpcContract>> = {}
       activity_snapshot: async () => ({ available: true, activities: [] }),
       file_preview: async () => ({ outcome: "unavailable", reason: "file_unavailable" }),
       tree_git: async ({ paths }) => ({ gitAvailable: "available", entries: paths.map((path) => ({ path })) }),
+      workspace: async () => ({ rootPath: "/workspace/project", hostId: "host_1", branchName: "main", isGitRepo: true }),
+      tree: async () => ({ entries: [], truncated: false }),
+      activity: async () => ({ files: [], status: [] }),
+      prefs_get: async () => ({ showDiff: true, showSize: false, showMtime: false, showFullPath: false, useNerdFontIcons: false, autoCollapse: true }),
+      prefs_set: async (input) => input,
+      stats: async ({ paths }) => ({ entries: paths.map((path) => ({ path, size: null, mtimeMs: null })) }),
+      log: async () => null,
       ...handlers,
     },
   });
@@ -87,7 +94,7 @@ describe("fixed-tab file explorer", () => {
     expect(requests(view)).toHaveLength(2);
   });
 
-  it("restores manual expansion when returning to the same thread and workspace", async () => {
+  it("resets manual expansion when the tab returns to the same thread and workspace", async () => {
     const view = mount({ tree_list: ({ path }) => path === "" ? available("", listings[""]) : available(path ?? "") });
     fireEvent.click(await view.findByRole("button", { name: "src" }));
     await view.findByRole("button", { name: "app.ts" });
@@ -97,8 +104,8 @@ describe("fixed-tab file explorer", () => {
     expect(view.getByRole("button", { name: "src" }).getAttribute("aria-expanded")).toBe("false");
 
     view.lifecycle.rerender(<DynamicFileTreeTab {...context} />);
-    await view.findByRole("button", { name: "app.ts" });
-    expect(view.getByRole("button", { name: "src" }).getAttribute("aria-expanded")).toBe("true");
+    await view.findByRole("button", { name: "src" });
+    expect(view.getByRole("button", { name: "src" }).getAttribute("aria-expanded")).toBe("false");
   });
 
   it("keeps child loading local and deduplicates an in-flight folder request", async () => {

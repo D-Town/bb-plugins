@@ -31,6 +31,42 @@ export const activityUpdatedSchema = activitySnapshotOutputSchema.extend({
   sequence: z.number().int().nonnegative(),
 });
 
+export const liveActivityFileSchema = z.strictObject({
+  threadId: z.string().min(1),
+  parentThreadId: z.string().nullable(),
+  path: z.string().min(1).max(4096),
+  kind: z.enum(["read", "write"]),
+  atMs: z.number().int().nonnegative(),
+  additions: z.number().int().nonnegative(),
+  deletions: z.number().int().nonnegative(),
+});
+export const liveActivityStatusSchema = z.strictObject({
+  path: z.string().min(1).max(4096),
+  addedAt: z.number().int().nonnegative().nullable(),
+  deletedAt: z.number().int().nonnegative().nullable(),
+});
+export const liveActivityOutputSchema = z.strictObject({
+  threadId: z.string().min(1),
+  parentThreadId: z.string().nullable(),
+  files: z.array(liveActivityFileSchema).max(10_000),
+  status: z.array(liveActivityStatusSchema).max(10_000),
+});
+export const workspaceInputSchema = z.strictObject({ threadId: z.string().trim().min(1), environmentId: z.string().trim().min(1) });
+export const workspaceOutputSchema = z.strictObject({ rootPath: z.string(), hostId: z.string(), branchName: z.string().nullable(), isGitRepo: z.boolean() });
+export const treeInputSchema = z.strictObject({ rootPath: z.string().max(4096), hostId: z.string().min(1) });
+export const treeOutputSchema = z.strictObject({
+  entries: z.array(z.strictObject({ path: z.string().min(1).max(4096), kind: z.enum(["directory", "file"]) })).max(10_000),
+  truncated: z.boolean(),
+});
+export const activityInputSchema = z.strictObject({ threadId: z.string().trim().min(1) });
+export const activityOutputSchema = z.strictObject({ files: z.array(liveActivityFileSchema).max(10_000), status: z.array(liveActivityStatusSchema).max(10_000) });
+export const prefsSchema = z.strictObject({
+  showDiff: z.boolean(), showSize: z.boolean(), showMtime: z.boolean(), showFullPath: z.boolean(), useNerdFontIcons: z.boolean(), autoCollapse: z.boolean(),
+});
+export const statsInputSchema = z.strictObject({ rootPath: z.string().max(4096), paths: z.array(z.string().min(1).max(4096)).max(500) });
+export const statsOutputSchema = z.strictObject({ entries: z.array(z.strictObject({ path: z.string(), size: z.number().int().nonnegative().nullable(), mtimeMs: z.number().nonnegative().nullable() })).max(500) });
+export const logInputSchema = z.strictObject({ message: z.string().max(2048) });
+
 const gitStateSchema = z.enum([
   "clean",
   "modified",
@@ -116,6 +152,13 @@ export const rpcContract = defineRpcContract({
   },
   file_preview: { input: filePreviewInputSchema, output: filePreviewOutputSchema },
   tree_git: { input: treeGitInputSchema, output: treeGitOutputSchema },
+  workspace: { input: workspaceInputSchema, output: workspaceOutputSchema },
+  tree: { input: treeInputSchema, output: treeOutputSchema },
+  activity: { input: activityInputSchema, output: activityOutputSchema },
+  prefs_get: { input: z.strictObject({}), output: prefsSchema },
+  prefs_set: { input: prefsSchema, output: prefsSchema },
+  stats: { input: statsInputSchema, output: statsOutputSchema },
+  log: { input: logInputSchema, output: z.null() },
 });
 
 export type FilePreviewInput = z.infer<typeof filePreviewInputSchema>;
@@ -129,4 +172,11 @@ export type ActivePathActivity = z.infer<typeof activePathActivitySchema>;
 export type ActivitySnapshotInput = z.infer<typeof activitySnapshotInputSchema>;
 export type ActivitySnapshotOutput = z.infer<typeof activitySnapshotOutputSchema>;
 export type ActivityUpdated = z.infer<typeof activityUpdatedSchema>;
+export type LiveActivityFile = z.infer<typeof liveActivityFileSchema>;
+export type LiveActivityStatus = z.infer<typeof liveActivityStatusSchema>;
+export type LiveActivityOutput = z.infer<typeof liveActivityOutputSchema>;
+export type Prefs = z.infer<typeof prefsSchema>;
+export type WorkspaceOutput = z.infer<typeof workspaceOutputSchema>;
+export type TreeOutput = z.infer<typeof treeOutputSchema>;
+export type ActivityOutput = z.infer<typeof activityOutputSchema>;
 export type { GitState, TreeEntry };

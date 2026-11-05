@@ -99,6 +99,13 @@ describe("direct environment directory data", () => {
     if (result.outcome === "available") expect(result.entries.every((entry) => entry.gitState === undefined)).toBe(true);
   });
 
+  it("merges stored preferences with defaults and validates updates", async () => {
+    const { data } = setup();
+    expect(await data.prefsGet()).toEqual({ showDiff: true, showSize: false, showMtime: false, showFullPath: false, useNerdFontIcons: false, autoCollapse: true });
+    await data.prefsSet({ showDiff: false, showSize: true, showMtime: true, showFullPath: true, useNerdFontIcons: true, autoCollapse: false });
+    expect(await data.prefsGet()).toMatchObject({ showDiff: false, showSize: true, autoCollapse: false });
+  });
+
   it.each([false, true])("keeps filesystem data when Git is unavailable (throw=%s)", async (gitError) => {
     const { data } = setup({ gitError, git: { outcome: "unavailable", failure: { code: "offline", workspacePath: "/private", message: "offline" } } });
     expect(await data.listTree({ environmentId: "env_1", path: "" })).toMatchObject({ outcome: "available", gitAvailable: "unavailable", truncated: false });

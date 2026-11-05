@@ -1,9 +1,10 @@
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import { posix, win32 } from "node:path";
+import { stat } from "node:fs/promises";
 import { assertWorkspaceRelative, buildTree, type ListedPath, type GitState } from "./tree-model";
 import type { ActivePathActivity, ActivitySnapshotInput, ActivitySnapshotOutput, ListTreeInput, ListTreeOutput } from "./contracts";
-import { PREVIEW_MAX_BYTES } from "./contracts";
-import type { FilePreviewInput, FilePreviewOutput, TreeGitInput, TreeGitOutput } from "./contracts";
+import { PREVIEW_MAX_BYTES, prefsSchema } from "./contracts";
+import type { ActivityOutput, FilePreviewInput, FilePreviewOutput, Prefs, TreeGitInput, TreeGitOutput, TreeOutput, WorkspaceOutput } from "./contracts";
 import { collectActiveActivities } from "./activity-model";
 import { z } from "zod";
 
@@ -93,6 +94,62 @@ function completedFileChanges(rows: readonly unknown[]): ActivePathActivity[] {
 }
 
 export function createServerData(bb: BbPluginApi) {
+  const defaultPrefs: Prefs = { showDiff: true, showSize: false, showMtime: false, showFullPath: false, useNerdFontIcons: false, autoCollapse: true };
+
+  async function workspace(input: { threadId: string; environmentId: string }): Promise<WorkspaceOutput> {
+    const environment = await bb.sdk.environments.get({ environmentId: input.environmentId });
+    return {
+      rootPath: environment.path ?? "",
+      hostId: environment.hostId,
+      branchName: environment.branchName,
+      isGitRepo: environment.isGitRepo,
+    };
+  }
+
+  async function tree(input: { rootPath: string; hostId: string }): Promise<TreeOutput> {
+    if (!input.rootPath) return { entries: [], truncated: false };
+    const result = await bb.sdk.files.listPaths({
+      hostId: input.hostId,
+      path: input.rootPath,
+      includeFiles: true,
+      includeDirectories: true,
+      includeHidden: true,
+      excludeNames: [],
+      limit: 10_000,
+    });
+    const root = posix.normalize(input.rootPath).replace(/\/$/, "");
+    const entries = result.paths.flatMap((entry) => {
+      const absolute = entry.path.replaceAll("\\", "/");
+      const prefix = `${root}/`;
+      const relative = absolute === root ? "" : absolute.startsWith(prefix) ? absolute.slice(prefix.length) : entry.name;
+      return relative ? [{ path: relative, kind: entry.kind }] : [];
+    }).sort((left, right) => left.path.localeCompare(right.path));
+    return { entries, truncated: entries.length >= 10_000 };
+  }
+
+  async function prefsGet(): Promise<Prefs> {
+    const stored = await bb.storage.kv.get<unknown>("prefs");
+    return prefsSchema.parse({ ...defaultPrefs, ...(stored && typeof stored === "object" ? stored : {}) });
+  }
+
+  async function prefsSet(input: Prefs): Promise<Prefs> {
+    await bb.storage.kv.set("prefs", input);
+    return input;
+  }
+
+  async function stats(input: { rootPath: string; paths: string[] }) {
+    const root = posix.normalize(input.rootPath).replace(/\/$/, "");
+    const entries = await Promise.all(input.paths.map(async (path) => {
+      try {
+        assertWorkspaceRelative(path);
+        const file = await stat(posix.join(root, ...path.split("/")));
+        return { path, size: file.size, mtimeMs: file.mtimeMs };
+      } catch {
+        return { path, size: null, mtimeMs: null };
+      }
+    }));
+    return { entries };
+  }
   async function readGit(environmentId: string) {
     // Git is optional annotation data. Its failure must not hide the directory.
     let gitAvailable: "available" | "not_applicable" | "unavailable" = "unavailable";
@@ -275,5 +332,26 @@ export function createServerData(bb: BbPluginApi) {
     };
   }
 
-  return { listTree, activitySnapshot, filePreview, treeGit };
+  async function activity(_input: { threadId: string }): Promise<ActivityOutput> {
+    const snapshot = await activitySnapshot(_input);
+    return {
+      files: snapshot.activities.map((item) => ({
+        threadId: _input.threadId,
+        parentThreadId: null,
+        path: item.path,
+        kind: item.kind === "write" ? "write" as const : "read" as const,
+        atMs: Date.now(),
+        additions: 0,
+        deletions: 0,
+      })),
+      status: [],
+    };
+  }
+
+  async function log(message: string): Promise<null> {
+    bb.log.info(message);
+    return null;
+  }
+
+  return { listTree, activitySnapshot, filePreview, treeGit, workspace, tree, activity, prefsGet, prefsSet, stats, log };
 }

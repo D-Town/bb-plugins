@@ -1,17 +1,29 @@
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import { rpcContract, type ActivityUpdated } from "./src/contracts";
 import { createServerData } from "./src/server-data";
+import { createLiveActivityCollector } from "./src/live-activity";
 
 export { rpcContract } from "./src/contracts";
 
 export default async function plugin(bb: BbPluginApi) {
   const data = createServerData(bb);
+  const liveActivity = createLiveActivityCollector(bb);
 
   bb.rpc.register(rpcContract, {
     activity_snapshot: (input) => data.activitySnapshot(input),
     tree_list: (input) => data.listTree(input),
     file_preview: (input) => data.filePreview(input),
     tree_git: (input) => data.treeGit(input),
+    workspace: (input) => data.workspace(input),
+    tree: (input) => data.tree(input),
+    activity: (input) => {
+      const snapshot = liveActivity.snapshot(input.threadId);
+      return snapshot.files.length || snapshot.status.length ? snapshot : data.activity(input);
+    },
+    prefs_get: () => data.prefsGet(),
+    prefs_set: (input) => data.prefsSet(input),
+    stats: (input) => data.stats(input),
+    log: (input) => data.log(input.message),
   });
 
   bb.events.on("experimental_thread.events", async ({ thread, sequence }) => {
@@ -35,6 +47,12 @@ export default async function plugin(bb: BbPluginApi) {
       } catch (fallbackError) {
         bb.log.error(`Activity fallback publish failed for thread ${thread.id}: ${String(fallbackError)}`);
       }
+    }
+    try {
+      const live = await liveActivity.sync(thread);
+      bb.realtime.publish("filetree-activity", live);
+    } catch (error) {
+      bb.log.debug(`Live activity unavailable for thread ${thread.id}: ${String(error)}`);
     }
   });
 

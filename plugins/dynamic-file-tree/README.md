@@ -3,9 +3,16 @@
 An MVP BB plugin for browsing the active thread's Environment or Worktree in
 the right thread sidebar.
 
-The first release is intentionally read-only. It will show the project tree,
-Git status, and BB's built-in preview for text, Markdown, and image files. The
-panel follows the active thread instead of using a global working directory.
+The plugin shows the active thread's project tree, Git status, line diffs, file
+size/mtime decorations, and BB's built-in preview for text, Markdown, and image
+files. Agent reads and writes are highlighted live; changed and deleted files
+receive temporary status markers. The panel follows the active thread instead
+of using a global working directory.
+
+The gear menu controls diff counts, size/mtime columns, full paths, Nerd-Font
+icons, and activity-driven auto-collapse. Preferences are stored through the
+plugin's namespaced BB key-value storage; tree expansion itself is session
+state and is intentionally not persisted.
 
 ## Development
 
