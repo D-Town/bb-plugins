@@ -1,7 +1,8 @@
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import { posix, win32 } from "node:path";
 import { assertWorkspaceRelative, buildTree, type ListedPath, type GitState } from "./tree-model";
-import type { ListTreeInput, ListTreeOutput } from "./contracts";
+import type { ActivitySnapshotInput, ActivitySnapshotOutput, ListTreeInput, ListTreeOutput } from "./contracts";
+import { collectActiveActivities } from "./activity-model";
 import { z } from "zod";
 
 const gitFileSchema = z.object({
@@ -59,6 +60,19 @@ function mapGitState(changeKind: z.infer<typeof gitFileSchema>["changeKind"], or
 }
 
 export function createServerData(bb: BbPluginApi) {
+  async function activitySnapshot(input: ActivitySnapshotInput): Promise<ActivitySnapshotOutput> {
+    try {
+      const timeline = await bb.sdk.threads.timeline({
+        threadId: input.threadId,
+        includeNestedRows: "true",
+        summaryOnly: "false",
+      });
+      return { available: true, activities: collectActiveActivities(timeline.rows) };
+    } catch {
+      return { available: false, activities: [] };
+    }
+  }
+
   async function listTree(input: ListTreeInput): Promise<ListTreeOutput> {
     let environment;
     try {
@@ -161,5 +175,5 @@ export function createServerData(bb: BbPluginApi) {
     };
   }
 
-  return { listTree };
+  return { listTree, activitySnapshot };
 }

@@ -26,6 +26,11 @@ export const activitySnapshotOutputSchema = z.object({
   activities: z.array(activePathActivitySchema),
 });
 
+export const activityUpdatedSchema = activitySnapshotOutputSchema.extend({
+  threadId: z.string().min(1),
+  sequence: z.number().int().nonnegative(),
+});
+
 const gitStateSchema = z.enum([
   "clean",
   "modified",
@@ -82,4 +87,5 @@ export type ListTreeOutput = z.infer<typeof listTreeOutputSchema>;
 export type ActivePathActivity = z.infer<typeof activePathActivitySchema>;
 export type ActivitySnapshotInput = z.infer<typeof activitySnapshotInputSchema>;
 export type ActivitySnapshotOutput = z.infer<typeof activitySnapshotOutputSchema>;
+export type ActivityUpdated = z.infer<typeof activityUpdatedSchema>;
 export type { GitState, TreeEntry };
