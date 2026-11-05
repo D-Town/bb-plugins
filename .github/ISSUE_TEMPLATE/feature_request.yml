@@ -1,0 +1,36 @@
+name: Feature request
+description: Suggest an improvement for a BB plugin.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the user problem first. A concrete example is especially helpful.
+  - type: input
+    id: plugin
+    attributes:
+      label: Plugin
+      description: Which plugin should this improve?
+      placeholder: Dynamic File Tree
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: What would you like to accomplish?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What should the plugin do differently?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
