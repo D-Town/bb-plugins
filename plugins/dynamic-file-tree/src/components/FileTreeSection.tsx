@@ -114,10 +114,11 @@ const explorerStyles = `
 .dynamic-file-tree [role=treeitem]:focus-visible > .file-tree-entry { outline: 1px solid var(--ring, currentColor); outline-offset: -1px; }
 .dynamic-file-tree .file-tree-icon { width: 14px; height: 14px; flex: 0 0 14px; opacity: .8; }
 .dynamic-file-tree .file-tree-chevron { width: 12px; height: 12px; flex: 0 0 12px; }
-.dynamic-file-tree .file-tree-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dynamic-file-tree .file-tree-git-state { margin-left: auto; padding-left: 8px; font-size: 11px; font-weight: 600; }
-.dynamic-file-tree .file-tree-diff-stats { display: inline-flex; gap: 5px; padding-left: 8px; font-size: 10px; font-weight: 600; }
-.dynamic-file-tree .file-tree-file-stat { padding-left: 7px; opacity: .55; font-size: 10px; white-space: nowrap; }
+.dynamic-file-tree .file-tree-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dynamic-file-tree .file-tree-meta { display: inline-flex; align-items: center; justify-content: flex-end; gap: 7px; flex: 0 0 auto; margin-left: auto; min-width: 0; }
+.dynamic-file-tree .file-tree-git-state { width: 1.2ch; padding: 0; font-size: 11px; font-weight: 600; text-align: right; }
+.dynamic-file-tree .file-tree-diff-stats { display: inline-flex; justify-content: flex-end; gap: 5px; width: 7ch; padding: 0; font-size: 10px; font-weight: 600; }
+.dynamic-file-tree .file-tree-file-stat { width: 8ch; padding: 0; opacity: .55; font-size: 10px; text-align: right; white-space: nowrap; }
 .dynamic-file-tree .file-tree-additions { color: var(--filetree-diff-add, #38854b); }
 .dynamic-file-tree .file-tree-deletions { color: var(--filetree-diff-delete, #cf4545); }
 .dynamic-file-tree [data-git=modified], .dynamic-file-tree [data-git=renamed] { color: var(--filetree-modified, #ad7900); }
@@ -646,6 +647,7 @@ function ContextExplorer({ threadId, environmentId }: { threadId: string; enviro
         const displayName = prefs.showFullPath ? entry.path : entry.name;
         const marker = state.status.get(entry.path);
         const markerClass = marker?.deletedAt !== null && marker?.deletedAt !== undefined ? "file-tree-status-deleted" : marker?.addedAt !== null && marker?.addedAt !== undefined ? "file-tree-status-added" : "";
+        const hasMetadata = (entry.gitState && entry.gitState !== "clean") || (prefs.showDiff && (entry.additions || entry.deletions)) || (prefs.showSize && fileStats.get(entry.path)?.size !== null && fileStats.get(entry.path)?.size !== undefined) || (prefs.showMtime && fileStats.get(entry.path)?.mtimeMs !== null && fileStats.get(entry.path)?.mtimeMs !== undefined);
         return <div
           key={entry.path}
           ref={(element) => {
@@ -687,13 +689,15 @@ function ContextExplorer({ threadId, environmentId }: { threadId: string; enviro
               ? <span aria-hidden="true" className={`file-tree-glyph ${activityClass}`}>{entryGlyph(entry, expanded)}</span>
               : <Icon name={entryIcon(entry, expanded)} fallback="File" aria-hidden="true" className={`file-tree-icon ${activityClass}`} />}
             <span className={`file-tree-name ${activityClass} ${markerClass}`}>{displayName}</span>
-            {entry.gitState && entry.gitState !== "clean" ? <span aria-hidden="true" data-git={entry.gitState} title={`Git: ${gitStateLabels[entry.gitState]}`} className="file-tree-git-state">{gitMarkers[entry.gitState]}</span> : null}
-            {prefs.showDiff && (entry.additions || entry.deletions) ? <span className="file-tree-diff-stats" aria-hidden="true" title={`Diff: +${entry.additions ?? 0}, -${entry.deletions ?? 0}`}>
-              <span className="file-tree-additions">+{entry.additions ?? 0}</span>
-              <span className="file-tree-deletions">−{entry.deletions ?? 0}</span>
+            {hasMetadata ? <span className="file-tree-meta">
+              {entry.gitState && entry.gitState !== "clean" ? <span aria-hidden="true" data-git={entry.gitState} title={`Git: ${gitStateLabels[entry.gitState]}`} className="file-tree-git-state">{gitMarkers[entry.gitState]}</span> : null}
+              {prefs.showDiff && (entry.additions || entry.deletions) ? <span className="file-tree-diff-stats" aria-hidden="true" title={`Diff: +${entry.additions ?? 0}, -${entry.deletions ?? 0}`}>
+                <span className="file-tree-additions">+{entry.additions ?? 0}</span>
+                <span className="file-tree-deletions">−{entry.deletions ?? 0}</span>
+              </span> : null}
+              {prefs.showSize && fileStats.get(entry.path)?.size !== null && fileStats.get(entry.path)?.size !== undefined ? <span className="file-tree-file-stat">{formatSize(fileStats.get(entry.path)!.size!)}</span> : null}
+              {prefs.showMtime && fileStats.get(entry.path)?.mtimeMs !== null && fileStats.get(entry.path)?.mtimeMs !== undefined ? <span className="file-tree-file-stat" title={new Date(fileStats.get(entry.path)!.mtimeMs!).toLocaleString("de-DE")}>{formatMtime(fileStats.get(entry.path)!.mtimeMs!)}</span> : null}
             </span> : null}
-            {prefs.showSize && fileStats.get(entry.path)?.size !== null && fileStats.get(entry.path)?.size !== undefined ? <span className="file-tree-file-stat">{formatSize(fileStats.get(entry.path)!.size!)}</span> : null}
-            {prefs.showMtime && fileStats.get(entry.path)?.mtimeMs !== null && fileStats.get(entry.path)?.mtimeMs !== undefined ? <span className="file-tree-file-stat" title={new Date(fileStats.get(entry.path)!.mtimeMs!).toLocaleString("de-DE")}>{formatMtime(fileStats.get(entry.path)!.mtimeMs!)}</span> : null}
           </button>
           {isDirectory && expanded ? <div role="group">{renderDirectory(entry.path, depth + 1)}</div> : null}
         </div>;
