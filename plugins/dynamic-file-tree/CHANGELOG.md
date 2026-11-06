@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/D-Town/bb-plugins/compare/dynamic-file-tree/v1.0.0...dynamic-file-tree/v1.1.0) (2026-11-06)
+
+
+### Features
+
+* **dynamic-file-tree:** add selectable multilingual UI ([#4](https://github.com/D-Town/bb-plugins/issues/4)) ([8406f3f](https://github.com/D-Town/bb-plugins/commit/8406f3f9804530b091109ea8d3e9f04836c09318))
+
 ## 1.0.0 (2026-11-05)
 
 
