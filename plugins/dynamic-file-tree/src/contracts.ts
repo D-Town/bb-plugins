@@ -61,7 +61,9 @@ export const treeOutputSchema = z.strictObject({
 export const activityInputSchema = z.strictObject({ threadId: z.string().trim().min(1) });
 export const activityOutputSchema = z.strictObject({ files: z.array(liveActivityFileSchema).max(10_000), status: z.array(liveActivityStatusSchema).max(10_000) });
 const colorSchema = z.string().regex(/^#[0-9a-fA-F]{6}$/, "Expected a six-digit hex color");
+const localePreferenceSchema = z.enum(["auto", "en", "de"]);
 export const prefsSchema = z.strictObject({
+  locale: localePreferenceSchema,
   showDiff: z.boolean(), showSize: z.boolean(), showMtime: z.boolean(), showFullPath: z.boolean(), useNerdFontIcons: z.boolean(), autoCollapse: z.boolean(),
   readColor: colorSchema,
   writeColor: colorSchema,

@@ -13,6 +13,7 @@ import type { ActivePathActivity, ActivitySnapshotOutput, ListTreeInput, ListTre
 afterEach(() => {
   cleanup();
   sessionStorage.clear();
+  document.documentElement.lang = "";
 });
 
 const context = { threadId: "thread_1", environment: { id: "env_1" } };
@@ -52,7 +53,7 @@ function mount(handlers: Partial<PluginRpcTestHandlers<typeof rpcContract>> = {}
       workspace: async () => ({ rootPath: "/workspace/project", hostId: "host_1", branchName: "main", isGitRepo: true }),
       tree: async () => ({ entries: [], truncated: false }),
       activity: async () => ({ files: [], status: [] }),
-      prefs_get: async () => ({ showDiff: true, showSize: false, showMtime: false, showFullPath: false, useNerdFontIcons: false, autoCollapse: true, readColor: "#8b5cf6", writeColor: "#f59e0b", addedColor: "#22c55e", deletedColor: "#ef4444", modifiedColor: "#ad7900", diffAddColor: "#38854b", diffDeleteColor: "#cf4545" }),
+      prefs_get: async () => ({ locale: "auto", showDiff: true, showSize: false, showMtime: false, showFullPath: false, useNerdFontIcons: false, autoCollapse: true, readColor: "#8b5cf6", writeColor: "#f59e0b", addedColor: "#22c55e", deletedColor: "#ef4444", modifiedColor: "#ad7900", diffAddColor: "#38854b", diffDeleteColor: "#cf4545" }),
       prefs_set: async (input) => input,
       stats: async ({ paths }) => ({ entries: paths.map((path) => ({ path, size: null, mtimeMs: null })) }),
       log: async () => null,
@@ -68,6 +69,36 @@ async function update(view: ReturnType<typeof mount>, activities: ActivePathActi
 }
 
 describe("fixed-tab file explorer", () => {
+  it("uses the host locale for the explorer UI and settings", async () => {
+    document.documentElement.lang = "de-DE";
+    const view = mount();
+
+    await view.findByRole("button", { name: "src" });
+    expect(view.getByRole("tree", { name: "Projektdateien" })).toBeTruthy();
+    expect(view.getByText("Dateibaum")).toBeTruthy();
+    expect(view.getByText("3 Elemente")).toBeTruthy();
+
+    fireEvent.click(view.getByRole("button", { name: "Dateibaum-Einstellungen" }));
+    expect(view.getByRole("dialog", { name: "Dateibaum-Einstellungen" })).toBeTruthy();
+    expect(view.getByText("Größe")).toBeTruthy();
+    expect(view.getByText("Zuletzt geändert")).toBeTruthy();
+    expect(view.getByText("Farben")).toBeTruthy();
+  });
+
+  it("allows an explicit English selection while the host is German", async () => {
+    document.documentElement.lang = "de-DE";
+    const view = mount();
+
+    await view.findByRole("button", { name: "src" });
+    fireEvent.click(view.getByRole("button", { name: "Dateibaum-Einstellungen" }));
+    const language = view.getByRole("combobox", { name: "Sprache" });
+
+    fireEvent.change(language, { target: { value: "en" } });
+    expect(view.getByRole("tree", { name: "Project files" })).toBeTruthy();
+    expect(view.getByText("File tree")).toBeTruthy();
+    expect(view.getByRole("button", { name: "File tree settings" })).toBeTruthy();
+  });
+
   it("maps common file types to one stable icon color", () => {
     expect(fileIconColor(file("src/app.ts"))).toBe("#3178c6");
     expect(fileIconColor(file("src/App.tsx"))).toBe("#7c6cff");

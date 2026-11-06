@@ -122,8 +122,8 @@ describe("direct environment directory data", () => {
 
   it("merges stored preferences with defaults and validates updates", async () => {
     const { data } = setup();
-    expect(await data.prefsGet()).toEqual({ showDiff: true, showSize: false, showMtime: false, showFullPath: false, useNerdFontIcons: false, autoCollapse: true, readColor: "#8b5cf6", writeColor: "#f59e0b", addedColor: "#22c55e", deletedColor: "#ef4444", modifiedColor: "#ad7900", diffAddColor: "#38854b", diffDeleteColor: "#cf4545" });
-    await data.prefsSet({ showDiff: false, showSize: true, showMtime: true, showFullPath: true, useNerdFontIcons: true, autoCollapse: false, readColor: "#112233", writeColor: "#223344", addedColor: "#334455", deletedColor: "#445566", modifiedColor: "#556677", diffAddColor: "#667788", diffDeleteColor: "#778899" });
+    expect(await data.prefsGet()).toEqual({ locale: "auto", showDiff: true, showSize: false, showMtime: false, showFullPath: false, useNerdFontIcons: false, autoCollapse: true, readColor: "#8b5cf6", writeColor: "#f59e0b", addedColor: "#22c55e", deletedColor: "#ef4444", modifiedColor: "#ad7900", diffAddColor: "#38854b", diffDeleteColor: "#cf4545" });
+    await data.prefsSet({ locale: "en", showDiff: false, showSize: true, showMtime: true, showFullPath: true, useNerdFontIcons: true, autoCollapse: false, readColor: "#112233", writeColor: "#223344", addedColor: "#334455", deletedColor: "#445566", modifiedColor: "#556677", diffAddColor: "#667788", diffDeleteColor: "#778899" });
     expect(await data.prefsGet()).toMatchObject({ showDiff: false, showSize: true, autoCollapse: false });
   });
 
