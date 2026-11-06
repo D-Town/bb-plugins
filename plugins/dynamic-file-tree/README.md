@@ -16,6 +16,11 @@ namespaced BB key-value storage; tree expansion itself is session state and is
 intentionally not persisted. The fixed tab uses BB's `FolderTree` icon; the
 panel header uses `FolderTree`, `GitBranch`, `RefreshCw`, and `Settings2`.
 
+The user interface follows the host document or browser locale by default.
+English and German are supported; unsupported or unavailable locales fall back
+to English. The gear menu also provides an explicit language preference for
+choosing automatic detection, English, or German.
+
 Activity is collected from provider file events and, for shell-backed providers
 such as Codex, common command executions (`sed`, `rg`, `cat`, and
 `apply_patch`) as a fallback. This keeps the tree useful even when the provider

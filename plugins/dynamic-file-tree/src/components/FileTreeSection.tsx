@@ -5,6 +5,7 @@ import type { ExperimentalThreadTabProps } from "@get-bb/plugin-sdk/app";
 import { activeAncestorPaths, ancestorPaths } from "../activity-model";
 import { activityUpdatedSchema, liveActivityOutputSchema, rpcContract } from "../contracts";
 import type { ActivitySnapshotOutput, FilePreviewOutput, ListTreeOutput, TreeEntry, WorkspaceOutput } from "../contracts";
+import { createTranslator, detectLocale, formatMtime, resolveLocalePreference, type LocalePreference, type Translator } from "../i18n";
 
 type DirectoryState =
   | { status: "loading" }
@@ -21,16 +22,9 @@ interface ExplorerState {
   preview: { path: string; result: FilePreviewOutput | null } | null;
 }
 
-const gitStateLabels: Record<NonNullable<TreeEntry["gitState"]>, string> = {
-  clean: "clean",
-  modified: "modified",
-  added: "added",
-  deleted: "deleted",
-  renamed: "renamed",
-  untracked: "untracked",
-};
 const gitMarkers = { clean: "", modified: "M", added: "A", deleted: "D", renamed: "R", untracked: "U" };
 type ExplorerPrefs = {
+  locale: LocalePreference;
   showDiff: boolean;
   showSize: boolean;
   showMtime: boolean;
@@ -46,6 +40,7 @@ type ExplorerPrefs = {
   diffDeleteColor: string;
 };
 const defaultPrefs: ExplorerPrefs = {
+  locale: "auto",
   showDiff: true, showSize: false, showMtime: false, showFullPath: false, useNerdFontIcons: false, autoCollapse: true,
   readColor: "#8b5cf6", writeColor: "#f59e0b", addedColor: "#22c55e", deletedColor: "#ef4444", modifiedColor: "#ad7900",
   diffAddColor: "#38854b", diffDeleteColor: "#cf4545",
@@ -90,23 +85,6 @@ function formatSize(size: number) {
   if (size < 1024 * 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(1)} MB`;
   return `${(size / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
-function formatMtime(mtimeMs: number) {
-  const minutes = Math.max(0, Math.floor((Date.now() - mtimeMs) / 60_000));
-  if (minutes < 1) return "gerade eben";
-  if (minutes < 60) return `vor ${minutes} Min.`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `vor ${hours} Std.`;
-  return new Date(mtimeMs).toLocaleDateString("de-DE");
-}
-const previewErrors: Record<Extract<FilePreviewOutput, { outcome: "unavailable" }>["reason"], string> = {
-  unsupported: "Unsupported file type for inline preview. Open this file in BB's preview-capable surface.",
-  too_large: "This file is too large for inline preview (64 KiB limit).",
-  invalid_path: "This file path is unavailable.",
-  no_workspace: "No workspace is available for preview.",
-  environment_unavailable: "The workspace is currently unavailable.",
-  file_unavailable: "This file could not be previewed.",
-};
-
 // Scoped styles keep host typography/colors and the tree's roving focus model.
 const explorerStyles = `
 .dynamic-file-tree { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; font-size: 12px; padding: 4px 0; }
@@ -163,7 +141,8 @@ function StatusMessage({ children, label }: { children: ReactNode; label?: strin
 }
 
 export function FileTreeView(props: ExperimentalThreadTabProps) {
-  if (props.environment === null) return <StatusMessage>No active workspace.</StatusMessage>;
+  const copy = createTranslator();
+  if (props.environment === null) return <StatusMessage>{copy.noActiveWorkspace}</StatusMessage>;
   return (
     <ContextExplorer
       key={JSON.stringify([props.threadId, props.environment.id])}
@@ -196,6 +175,7 @@ function ContextExplorer({ threadId, environmentId }: { threadId: string; enviro
   const [now, setNow] = useState(() => Date.now());
   const [workspaceInfo, setWorkspaceInfo] = useState<WorkspaceOutput | null>(null);
   const [fileStats, setFileStats] = useState<ReadonlyMap<string, { size: number | null; mtimeMs: number | null }>>(new Map());
+  const copy: Translator = createTranslator(resolveLocalePreference(prefs.locale, detectLocale()));
   const rows = useRef(new Map<string, HTMLDivElement>());
   const treeHasFocus = useRef(false);
   const inFlightDirectories = useRef(new Map<string, symbol>());
@@ -618,27 +598,27 @@ function ContextExplorer({ threadId, environmentId }: { threadId: string; enviro
   function renderDirectory(path: string, depth: number): ReactNode {
     const cached = state.directories.get(path);
     if (cached === undefined || cached.status === "loading") {
-      return <StatusMessage label={path === "" ? undefined : `Loading ${path}`}>
+      return <StatusMessage label={path === "" ? undefined : copy.loadingPath(path)}>
         <svg aria-hidden="true" width="12" height="12" viewBox="0 0 16 16" style={{ marginRight: 4 }}>
           <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeWidth="2" strokeDasharray="25 13">
             <animateTransform attributeName="transform" type="rotate" from="0 8 8" to="360 8 8" dur="1s" repeatCount="indefinite" />
           </circle>
         </svg>
-        {path === "" ? "Loading files…" : "Loading…"}
+        {path === "" ? copy.loadingFiles : copy.loading}
       </StatusMessage>;
     }
     if (cached.status === "loaded" && cached.result.outcome === "unavailable" && path === "") {
       return <StatusMessage>
-        {cached.result.reason === "no_workspace" ? "This thread has no workspace." : "The workspace is currently unavailable."}
+        {cached.result.reason === "no_workspace" ? copy.noWorkspace : copy.workspaceUnavailable}
       </StatusMessage>;
     }
     if (cached.status === "error" || cached.result.outcome === "unavailable") {
       return <div role="alert">
-        Could not load {path || "files"}: {cached.status === "error" ? cached.message : "Directory unavailable."}
-        <button type="button" tabIndex={path ? -1 : 0} aria-label={`Retry ${path || "files"}`} onClick={() => {
+        {copy.couldNotLoad(path)} {cached.status === "error" ? cached.message : copy.directoryUnavailable}
+        <button type="button" tabIndex={path ? -1 : 0} aria-label={copy.retry(path)} onClick={() => {
           focusRow(path);
           loadDirectory(path, true);
-        }}>Retry</button>
+        }}>{copy.retry(path)}</button>
       </div>;
     }
     const { entries: listedEntries, truncated } = cached.result;
@@ -648,9 +628,9 @@ function ContextExplorer({ threadId, environmentId }: { threadId: string; enviro
       entries.push({ path: ghostPath, name: ghostPath.slice(ghostPath.lastIndexOf("/") + 1), kind: "file", gitState: "deleted" });
     }
     return <>
-      {cached.refreshing ? <StatusMessage label={`Refreshing ${path || "files"}`}>Refreshing…</StatusMessage> : null}
-      {cached.refreshError ? <div role="alert">Could not refresh {path || "files"}. <button type="button" tabIndex={path ? -1 : 0} onClick={() => loadDirectory(path, true)}>Retry refresh</button></div> : null}
-      {entries.length === 0 ? <StatusMessage>No files found.</StatusMessage> : entries.map((entry) => {
+      {cached.refreshing ? <StatusMessage label={copy.refreshing(path)}>{copy.refreshing(path)}…</StatusMessage> : null}
+      {cached.refreshError ? <div role="alert">{copy.couldNotRefresh(path)} <button type="button" tabIndex={path ? -1 : 0} onClick={() => loadDirectory(path, true)}>{copy.retryRefresh}</button></div> : null}
+      {entries.length === 0 ? <StatusMessage>{copy.noFiles}</StatusMessage> : entries.map((entry) => {
         const isDirectory = entry.kind === "directory";
         const expanded = isExpanded(entry.path);
         const selected = state.selectedPath === entry.path;
@@ -678,9 +658,9 @@ function ContextExplorer({ threadId, environmentId }: { threadId: string; enviro
           aria-expanded={isDirectory ? expanded : undefined}
           aria-selected={selected}
           aria-description={[
-            entry.gitState && entry.gitState !== "clean" ? `Git: ${gitStateLabels[entry.gitState]}.` : "",
-            entry.additions || entry.deletions ? `Diff: +${entry.additions ?? 0}, -${entry.deletions ?? 0}.` : "",
-            isDirectory && expanded && failed ? "Could not load children. Press ArrowRight to retry." : "",
+            entry.gitState && entry.gitState !== "clean" ? copy.gitDescription(copy.gitStateLabels[entry.gitState]) : "",
+            entry.additions || entry.deletions ? copy.diffDescription(entry.additions ?? 0, entry.deletions ?? 0) : "",
+            isDirectory && expanded && failed ? copy.childrenLoadFailure : "",
           ].filter(Boolean).join(" ") || undefined}
           onFocus={(event) => {
             if (event.target === event.currentTarget) setFocusedPath(entry.path);
@@ -707,19 +687,19 @@ function ContextExplorer({ threadId, environmentId }: { threadId: string; enviro
               : <Icon name={entryIcon(entry, expanded)} fallback="File" aria-hidden="true" style={activityClass ? undefined : { color: fileIconColor(entry) }} className={`file-tree-icon ${activityClass}`} />}
             <span className={`file-tree-name ${activityClass} ${markerClass}`}>{displayName}</span>
             {hasMetadata ? <span className="file-tree-meta">
-              {entry.gitState && entry.gitState !== "clean" ? <span aria-hidden="true" data-git={entry.gitState} title={`Git: ${gitStateLabels[entry.gitState]}`} className="file-tree-git-state">{gitMarkers[entry.gitState]}</span> : null}
-              {prefs.showDiff && (entry.additions || entry.deletions) ? <span className="file-tree-diff-stats" aria-hidden="true" title={`Diff: +${entry.additions ?? 0}, -${entry.deletions ?? 0}`}>
+              {entry.gitState && entry.gitState !== "clean" ? <span aria-hidden="true" data-git={entry.gitState} title={copy.gitDescription(copy.gitStateLabels[entry.gitState])} className="file-tree-git-state">{gitMarkers[entry.gitState]}</span> : null}
+              {prefs.showDiff && (entry.additions || entry.deletions) ? <span className="file-tree-diff-stats" aria-hidden="true" title={copy.diffDescription(entry.additions ?? 0, entry.deletions ?? 0)}>
                 <span className="file-tree-additions">+{entry.additions ?? 0}</span>
                 <span className="file-tree-deletions">−{entry.deletions ?? 0}</span>
               </span> : null}
               {prefs.showSize && fileStats.get(entry.path)?.size !== null && fileStats.get(entry.path)?.size !== undefined ? <span className="file-tree-file-stat">{formatSize(fileStats.get(entry.path)!.size!)}</span> : null}
-              {prefs.showMtime && fileStats.get(entry.path)?.mtimeMs !== null && fileStats.get(entry.path)?.mtimeMs !== undefined ? <span className="file-tree-file-stat" title={new Date(fileStats.get(entry.path)!.mtimeMs!).toLocaleString("de-DE")}>{formatMtime(fileStats.get(entry.path)!.mtimeMs!)}</span> : null}
+              {prefs.showMtime && fileStats.get(entry.path)?.mtimeMs !== null && fileStats.get(entry.path)?.mtimeMs !== undefined ? <span className="file-tree-file-stat" title={new Date(fileStats.get(entry.path)!.mtimeMs!).toLocaleString(copy.locale === "de" ? "de-DE" : "en-US")}>{formatMtime(fileStats.get(entry.path)!.mtimeMs!, copy.locale, now)}</span> : null}
             </span> : null}
           </button>
           {isDirectory && expanded ? <div role="group">{renderDirectory(entry.path, depth + 1)}</div> : null}
         </div>;
       })}
-      {truncated ? <StatusMessage>Showing the first 10,000 paths.</StatusMessage> : null}
+      {truncated ? <StatusMessage>{copy.truncated}</StatusMessage> : null}
     </>;
   }
 
@@ -735,43 +715,50 @@ function ContextExplorer({ threadId, environmentId }: { threadId: string; enviro
   return <div className="dynamic-file-tree" style={themeStyle}>
     <style>{explorerStyles}</style>
     <header className="file-tree-header">
-      <div className="file-tree-header-title"><Icon name="DynamicFileTreeIcon" fallback="Folder" aria-hidden="true" className="file-tree-icon" /> <span>Filetree</span> <span className="file-tree-header-count">{visibleRows.length} items</span>{workspaceInfo?.branchName ? <span className="file-tree-branch">{workspaceInfo.branchName}</span> : null}</div>
+      <div className="file-tree-header-title"><Icon name="DynamicFileTreeIcon" fallback="Folder" aria-hidden="true" className="file-tree-icon" /> <span>{copy.tree}</span> <span className="file-tree-header-count">{copy.items(visibleRows.length)}</span>{workspaceInfo?.branchName ? <span className="file-tree-branch">{workspaceInfo.branchName}</span> : null}</div>
       <span className="file-tree-header-spacer" />
-      <button type="button" tabIndex={-1} className="file-tree-header-button" aria-label="Refresh filetree" title="Refresh filetree" onClick={refreshTree}>
+      <button type="button" tabIndex={-1} className="file-tree-header-button" aria-label={copy.refresh} title={copy.refresh} onClick={refreshTree}>
         <Icon name="DynamicRefreshIcon" fallback="RefreshCw" aria-hidden="true" />
       </button>
-      <button type="button" tabIndex={-1} className="file-tree-header-button" aria-label="Filetree settings" aria-expanded={settingsOpen} onClick={() => setSettingsOpen((open) => !open)}>
+      <button type="button" tabIndex={-1} className="file-tree-header-button" aria-label={copy.settings} aria-expanded={settingsOpen} onClick={() => setSettingsOpen((open) => !open)}>
         <Icon name="DynamicSettingsIcon" fallback="Settings" aria-hidden="true" />
       </button>
     </header>
-    {settingsOpen ? <div className="file-tree-settings" role="dialog" aria-label="Filetree settings">
-      <label className="file-tree-setting"><input type="checkbox" checked={prefs.showDiff} onChange={(event) => updatePrefs({ showDiff: event.target.checked })} /> Diff +/−</label>
-      <label className="file-tree-setting"><input type="checkbox" checked={prefs.showSize} onChange={(event) => updatePrefs({ showSize: event.target.checked })} /> Größe</label>
-      <label className="file-tree-setting"><input type="checkbox" checked={prefs.showMtime} onChange={(event) => updatePrefs({ showMtime: event.target.checked })} /> Zuletzt geändert</label>
-      <label className="file-tree-setting"><input type="checkbox" checked={prefs.showFullPath} onChange={(event) => updatePrefs({ showFullPath: event.target.checked })} /> Voller Pfad</label>
-      <label className="file-tree-setting"><input type="checkbox" checked={prefs.useNerdFontIcons} onChange={(event) => updatePrefs({ useNerdFontIcons: event.target.checked })} /> Nerd-Font-Icons</label>
-      <label className="file-tree-setting"><input type="checkbox" checked={prefs.autoCollapse} onChange={(event) => updatePrefs({ autoCollapse: event.target.checked })} /> Auto-Zuklappen</label>
+    {settingsOpen ? <div className="file-tree-settings" role="dialog" aria-label={copy.settings}>
+      <label className="file-tree-setting"><input type="checkbox" checked={prefs.showDiff} onChange={(event) => updatePrefs({ showDiff: event.target.checked })} /> {copy.diff}</label>
+      <label className="file-tree-setting"><input type="checkbox" checked={prefs.showSize} onChange={(event) => updatePrefs({ showSize: event.target.checked })} /> {copy.size}</label>
+      <label className="file-tree-setting"><input type="checkbox" checked={prefs.showMtime} onChange={(event) => updatePrefs({ showMtime: event.target.checked })} /> {copy.lastModified}</label>
+      <label className="file-tree-setting"><input type="checkbox" checked={prefs.showFullPath} onChange={(event) => updatePrefs({ showFullPath: event.target.checked })} /> {copy.fullPath}</label>
+      <label className="file-tree-setting"><input type="checkbox" checked={prefs.useNerdFontIcons} onChange={(event) => updatePrefs({ useNerdFontIcons: event.target.checked })} /> {copy.nerdFontIcons}</label>
+      <label className="file-tree-setting"><input type="checkbox" checked={prefs.autoCollapse} onChange={(event) => updatePrefs({ autoCollapse: event.target.checked })} /> {copy.autoCollapse}</label>
+      <label className="file-tree-setting">{copy.language}
+        <select aria-label={copy.language} value={prefs.locale} onChange={(event) => updatePrefs({ locale: event.target.value as LocalePreference })}>
+          <option value="auto">{copy.languageAuto}</option>
+          <option value="en">{copy.languageEnglish}</option>
+          <option value="de">{copy.languageGerman}</option>
+        </select>
+      </label>
       <div className="file-tree-settings-divider" />
-      <div className="file-tree-settings-label">Farben</div>
-      <label className="file-tree-color-setting">Lesen <input aria-label="Farbe für Lesen" type="color" value={prefs.readColor} onChange={(event) => updatePrefs({ readColor: event.target.value })} /></label>
-      <label className="file-tree-color-setting">Schreiben <input aria-label="Farbe für Schreiben" type="color" value={prefs.writeColor} onChange={(event) => updatePrefs({ writeColor: event.target.value })} /></label>
-      <label className="file-tree-color-setting">Hinzugefügt <input aria-label="Farbe für hinzugefügte Dateien" type="color" value={prefs.addedColor} onChange={(event) => updatePrefs({ addedColor: event.target.value })} /></label>
-      <label className="file-tree-color-setting">Gelöscht <input aria-label="Farbe für gelöschte Dateien" type="color" value={prefs.deletedColor} onChange={(event) => updatePrefs({ deletedColor: event.target.value })} /></label>
-      <label className="file-tree-color-setting">Geändert <input aria-label="Farbe für geänderte Dateien" type="color" value={prefs.modifiedColor} onChange={(event) => updatePrefs({ modifiedColor: event.target.value })} /></label>
-      <label className="file-tree-color-setting">Diff + <input aria-label="Farbe für Diff-Zunahmen" type="color" value={prefs.diffAddColor} onChange={(event) => updatePrefs({ diffAddColor: event.target.value })} /></label>
-      <label className="file-tree-color-setting">Diff − <input aria-label="Farbe für Diff-Abnahmen" type="color" value={prefs.diffDeleteColor} onChange={(event) => updatePrefs({ diffDeleteColor: event.target.value })} /></label>
+      <div className="file-tree-settings-label">{copy.colors}</div>
+      <label className="file-tree-color-setting">{copy.read} <input aria-label={copy.colorFor(copy.read)} type="color" value={prefs.readColor} onChange={(event) => updatePrefs({ readColor: event.target.value })} /></label>
+      <label className="file-tree-color-setting">{copy.write} <input aria-label={copy.colorFor(copy.write)} type="color" value={prefs.writeColor} onChange={(event) => updatePrefs({ writeColor: event.target.value })} /></label>
+      <label className="file-tree-color-setting">{copy.added} <input aria-label={copy.colorFor(copy.added)} type="color" value={prefs.addedColor} onChange={(event) => updatePrefs({ addedColor: event.target.value })} /></label>
+      <label className="file-tree-color-setting">{copy.deleted} <input aria-label={copy.colorFor(copy.deleted)} type="color" value={prefs.deletedColor} onChange={(event) => updatePrefs({ deletedColor: event.target.value })} /></label>
+      <label className="file-tree-color-setting">{copy.modified} <input aria-label={copy.colorFor(copy.modified)} type="color" value={prefs.modifiedColor} onChange={(event) => updatePrefs({ modifiedColor: event.target.value })} /></label>
+      <label className="file-tree-color-setting">{copy.diffAdd} <input aria-label={copy.colorFor(copy.diffAdd)} type="color" value={prefs.diffAddColor} onChange={(event) => updatePrefs({ diffAddColor: event.target.value })} /></label>
+      <label className="file-tree-color-setting">{copy.diffDelete} <input aria-label={copy.colorFor(copy.diffDelete)} type="color" value={prefs.diffDeleteColor} onChange={(event) => updatePrefs({ diffDeleteColor: event.target.value })} /></label>
     </div> : null}
-    <div role="tree" aria-label="Project files"
+    <div role="tree" aria-label={copy.projectFiles}
     onFocusCapture={() => { treeHasFocus.current = true; }}
     onBlurCapture={(event) => {
       if (!event.currentTarget.contains(event.relatedTarget)) treeHasFocus.current = false;
     }}
   >{renderDirectory("", 0)}</div>
-    {state.preview ? <section aria-label="File preview" className="file-tree-preview">
+    {state.preview ? <section aria-label={copy.filePreview} className="file-tree-preview">
       <div title={state.preview.path}>{state.preview.path}</div>
-      {state.preview.result === null ? <StatusMessage>Loading preview…</StatusMessage>
-        : state.preview.result.outcome === "available" ? <pre tabIndex={0} aria-label={`Preview of ${state.preview.path}`}>{state.preview.result.content}</pre>
-          : <div role="status">{previewErrors[state.preview.result.reason]}</div>}
+      {state.preview.result === null ? <StatusMessage>{copy.loadingPreview}</StatusMessage>
+        : state.preview.result.outcome === "available" ? <pre tabIndex={0} aria-label={copy.previewOf(state.preview.path)}>{state.preview.result.content}</pre>
+          : <div role="status">{copy.previewErrors[state.preview.result.reason]}</div>}
     </section> : null}
   </div>;
 }
