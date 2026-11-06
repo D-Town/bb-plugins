@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.1](https://github.com/D-Town/bb-plugins/compare/dynamic-file-tree/v1.1.0...dynamic-file-tree/v1.1.1) (2026-11-06)
+
+
+### Bug Fixes
+
+* **dynamic-file-tree:** build git installs without SDK runtime import ([#8](https://github.com/D-Town/bb-plugins/issues/8)) ([1792325](https://github.com/D-Town/bb-plugins/commit/1792325417b1faa8a00589a7403dc1b81028daff))
+
 ## [1.1.0](https://github.com/D-Town/bb-plugins/compare/dynamic-file-tree/v1.0.0...dynamic-file-tree/v1.1.0) (2026-11-06)
 
 
