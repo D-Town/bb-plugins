@@ -42,10 +42,21 @@ function itemFromRow(row: unknown): Record<string, unknown> | null {
   return object(data?.item) ?? data ?? source;
 }
 
-function recordItem(state: ActivityState, item: Record<string, unknown>, threadId: string, now: number, rootPath: string | null) {
+function eventItem(row: unknown): { eventType: "item/started" | "item/completed"; itemId: string; item: Record<string, unknown> } | null {
+  const source = object(row);
+  const eventType = source?.type;
+  if (eventType !== "item/started" && eventType !== "item/completed") return null;
+  const item = itemFromRow(row);
+  if (item === null) return null;
+  const itemId = typeof item.id === "string" && item.id.length > 0 ? item.id : null;
+  return itemId === null ? null : { eventType, itemId, item };
+}
+
+function recordItem(state: ActivityState, item: Record<string, unknown>, threadId: string, now: number, rootPath: string | null, active: boolean) {
   const type = item.type;
   const cwd = typeof item.cwd === "string" ? item.cwd.replaceAll("\\", "/").replace(/\/$/, "") : null;
   if (type === "fileRead") {
+    if (!active) return;
     const path = relativePath(item.path, rootPath, cwd);
     if (!path) return;
     const previous = state.files.get(path);
@@ -67,15 +78,17 @@ function recordItem(state: ActivityState, item: Record<string, unknown>, threadI
     if (!change || !path) continue;
     const previous = state.files.get(path);
     const diff = countDiff(typeof change.diff === "string" ? change.diff : undefined);
-    state.files.set(path, {
-      threadId,
-      parentThreadId: state.parentThreadId,
-      path,
-      kind: "write",
-      atMs: now,
-      additions: (previous?.additions ?? 0) + diff.additions,
-      deletions: (previous?.deletions ?? 0) + diff.deletions,
-    });
+    if (active) {
+      state.files.set(path, {
+        threadId,
+        parentThreadId: state.parentThreadId,
+        path,
+        kind: "write",
+        atMs: now,
+        additions: (previous?.additions ?? 0) + diff.additions,
+        deletions: (previous?.deletions ?? 0) + diff.deletions,
+      });
+    }
     if (change.kind === "add") state.status.set(path, { path, addedAt: now, deletedAt: null });
     if (change.kind === "delete") state.status.set(path, { path, addedAt: null, deletedAt: now });
   }
@@ -95,7 +108,9 @@ function recordItem(state: ActivityState, item: Record<string, unknown>, threadI
     if (!path) continue;
     const previous = state.files.get(path);
     const kind = match[1] === "Delete" ? "delete" : match[1] === "Add" ? "add" : "update";
-    state.files.set(path, { threadId, parentThreadId: state.parentThreadId, path, kind: "write", atMs: now, additions: previous?.additions ?? 0, deletions: previous?.deletions ?? 0 });
+    if (active) {
+      state.files.set(path, { threadId, parentThreadId: state.parentThreadId, path, kind: "write", atMs: now, additions: previous?.additions ?? 0, deletions: previous?.deletions ?? 0 });
+    }
     if (kind === "add") state.status.set(path, { path, addedAt: now, deletedAt: null });
     if (kind === "delete") state.status.set(path, { path, addedAt: null, deletedAt: now });
   }
@@ -133,9 +148,17 @@ export function createLiveActivityCollector(bb: BbPluginApi) {
       limit: "50",
       types: ["item/started", "item/completed"],
     });
-    for (const row of [...rows].reverse()) {
-      const item = itemFromRow(row);
-      if (item) recordItem(state, item, thread.id, now, rootPath);
+    const started = new Map<string, Record<string, unknown>>();
+    const completed = new Map<string, Record<string, unknown>>();
+    for (const row of rows) {
+      const event = eventItem(row);
+      if (!event) continue;
+      if (event.eventType === "item/started") started.set(event.itemId, event.item);
+      else completed.set(event.itemId, event.item);
+    }
+    for (const item of completed.values()) recordItem(state, item, thread.id, now, rootPath, false);
+    for (const [itemId, item] of started) {
+      if (!completed.has(itemId)) recordItem(state, item, thread.id, now, rootPath, true);
     }
     prune(state, now);
     states.set(thread.id, state);
