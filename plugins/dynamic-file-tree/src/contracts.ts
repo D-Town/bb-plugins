@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { defineRpcContract } from "@get-bb/plugin-sdk";
 import type { GitState, TreeEntry } from "./tree-model";
 import type { PluginTimelineRowStatus } from "@get-bb/plugin-sdk";
 
@@ -151,7 +150,7 @@ export const treeGitOutputSchema = z.strictObject({
   })).max(10_000),
 });
 
-export const rpcContract = defineRpcContract({
+export const rpcContract = {
   activity_snapshot: {
     input: activitySnapshotInputSchema,
     output: activitySnapshotOutputSchema,
@@ -169,7 +168,7 @@ export const rpcContract = defineRpcContract({
   prefs_set: { input: prefsSchema, output: prefsSchema },
   stats: { input: statsInputSchema, output: statsOutputSchema },
   log: { input: logInputSchema, output: z.null() },
-});
+};
 
 export type FilePreviewInput = z.infer<typeof filePreviewInputSchema>;
 export type FilePreviewOutput = z.infer<typeof filePreviewOutputSchema>;
